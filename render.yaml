@@ -1,0 +1,53 @@
+# Render Blueprint — DGC Global Community backend
+# Docs: https://render.com/docs/blueprint-spec
+#
+# How to use: in the Render dashboard → New → Blueprint → connect this repo.
+# Render reads this file, creates the web service, and prompts you for the
+# secret env vars below (the ones marked `sync: false`). Set those by copying
+# the values from your local .env — they are NOT stored in this file or in git.
+
+services:
+  - type: web
+    name: dgc-backend
+    runtime: node
+    region: oregon # same region as your Render Postgres (oregon-postgres) to keep DB latency low
+    plan: starter # always-on. The free plan spins down when idle, which drops WebSocket connections and pauses BullMQ workers.
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /health
+    # Install incl. devDeps (tsc/prisma live there) even though NODE_ENV=production, generate the client, then compile.
+    buildCommand: npm install --include=dev && npx prisma generate && npm run build
+    # migrate deploy is idempotent (no-op when up to date) and never resets — safe to run on every start.
+    startCommand: npx prisma migrate deploy && node dist/server.js
+    envVars:
+      # --- Non-secret config (safe to keep in the blueprint) ---
+      - key: NODE_ENV
+        value: production
+      - key: JWT_ACCESS_TTL
+        value: 15m
+      - key: JWT_REFRESH_TTL
+        value: 30d
+      - key: BREVO_SENDER_EMAIL
+        value: dev@davidicgenerationchurch.com
+      - key: BREVO_SENDER_NAME
+        value: DGC global
+      - key: CORS_ORIGIN
+        value: "*" # TIGHTEN to your real app origin(s) before launch (CLAUDE.md §9)
+      # --- Secrets: enter in the Render dashboard. `sync: false` = prompted, never stored in git. ---
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+# NOTE: PORT is injected by Render automatically — do not set it. The server reads process.env.PORT.

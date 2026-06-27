@@ -1,0 +1,573 @@
+// DGC Global Community — backend schema (Prisma 7, driver-adapter mode).
+// Design rules live in CLAUDE.md §5. Key principles encoded here:
+//   - Permission = role within a scope (roles on membership rows, not User booleans).
+//   - Read state = ChannelMembership.lastReadAt; MessageReceipt is DMs only.
+//   - The growth pipeline is DATA (GrowthStage / GrowthRequirement / Badge are seeded rows).
+//   - Branches & clusters are rows, not enums.
+//   - Audit/actor fields (createdById, verifiedById, pinnedById, ...) are plain scalar IDs
+//     with NO back-relation, to keep User lean. Integrity enforced in the service layer.
+//   - Soft deletes via deletedAt on User and Message.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum GlobalRole {
+  MEMBER
+  SUPER_ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum BranchRole {
+  MEMBER
+  ADMIN
+}
+
+enum ClusterRole {
+  MEMBER
+  MODERATOR
+}
+
+enum ChannelRole {
+  MEMBER
+  MODERATOR
+  ADMIN
+}
+
+enum ChannelType {
+  GLOBAL_ANNOUNCEMENT
+  BRANCH_SECTION
+  CLUSTER
+  DM
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  SYSTEM
+}
+
+enum GrowthStageKey {
+  FIRST_TIMER
+  NEW_MEMBER
+  FOUNDATIONS_GRADUATE
+  WORKER
+  EMERGING_LEADER
+  CELL_LEADER
+  ADVANCED_SOM_GRADUATE
+  MINISTRY_LEADER
+  PASTORATE_CANDIDATE
+  PASTORATE
+}
+
+// How a requirement completion is recorded (see CLAUDE.md §5).
+enum RequirementType {
+  AUTO
+  SELF_ATTEST
+  ADMIN_VERIFY
+  CERTIFICATE
+}
+
+enum CertificateStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum RsvpStatus {
+  GOING
+  INTERESTED
+  NOT_GOING
+}
+
+enum MediaType {
+  SERMON
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+}
+
+enum AudioRoomStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+}
+
+// Audio-room roles are EPHEMERAL — tied to the room session, not the user (CLAUDE.md §6.1).
+enum AudioRole {
+  HOST
+  SPEAKER
+  LISTENER
+}
+
+enum NotificationType {
+  MESSAGE
+  MENTION
+  GROWTH
+  EVENT
+  REPORT
+  SYSTEM
+}
+
+enum ReportTargetType {
+  MESSAGE
+  USER
+  CHANNEL
+  PROFILE
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+// ============================================================================
+// Auth & identity
+// ============================================================================
+
+model User {
+  id          String     @id @default(cuid())
+  email       String     @unique
+  globalRole  GlobalRole @default(MEMBER)
+
+  // Profile
+  displayName String?
+  avatarUrl   String?
+  phoneNumber String? // PRD wants phone sign-up; phone OTP deferred (CLAUDE.md §10) — field kept for profile
+  gender      Gender?
+  dateOfBirth DateTime? // used for safeguarding / minor handling (CLAUDE.md §9.1)
+  occupation  String?
+  bio         String?
+
+  // Denormalised pointer to current growth stage (recomputed by the growth engine).
+  currentStageId String?
+  currentStage   GrowthStage? @relation(fields: [currentStageId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  suspendedAt DateTime? // admin suspension (CLAUDE.md §13); null = active
+  deletedAt   DateTime? // soft delete
+
+  // Relations (ownership — not audit fields)
+  refreshTokens         RefreshToken[]
+  branchMemberships     BranchMembership[]
+  clusterMemberships    ClusterMembership[]
+  channelMemberships    ChannelMembership[]
+  messages              Message[]
+  reactions             Reaction[]
+  receipts              MessageReceipt[]
+  requirementCompletions RequirementCompletion[]
+  badges                UserBadge[]
+  certificates          Certificate[]
+  eventRsvps            EventRSVP[]
+  audioParticipations   AudioRoomParticipant[]
+  notifications         Notification[]
+  reportsFiled          Report[]
+
+  @@index([currentStageId])
+  @@index([deletedAt])
+}
+
+// One row per email; only a HASH of the OTP is stored (CLAUDE.md §9).
+model Otp {
+  email     String   @id
+  hash      String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// Only HASHES of refresh tokens are stored; supports rotation + revocation.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  hash      String
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ============================================================================
+// Branches & clusters (rows, not enums — CLAUDE.md §5)
+// ============================================================================
+
+model Branch {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  city      String
+  country   String   @default("Nigeria")
+  createdAt DateTime @default(now())
+
+  memberships BranchMembership[]
+  channels    Channel[]
+  events      Event[]
+}
+
+model BranchMembership {
+  id       String     @id @default(cuid())
+  userId   String
+  branchId String
+  role     BranchRole @default(MEMBER)
+  joinedAt DateTime   @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId])
+  @@index([branchId])
+}
+
+model Cluster {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String
+  isDefault   Boolean   @default(false)
+  archivedAt  DateTime? // admin archive (CLAUDE.md §13); null = active
+  createdAt   DateTime  @default(now())
+
+  memberships ClusterMembership[]
+  channels    Channel[]
+}
+
+model ClusterMembership {
+  id        String      @id @default(cuid())
+  userId    String
+  clusterId String
+  role      ClusterRole @default(MEMBER)
+  joinedAt  DateTime    @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cluster Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clusterId])
+  @@index([clusterId])
+}
+
+// ============================================================================
+// Channels & chat (the real-time core — CLAUDE.md §8.3)
+// ============================================================================
+
+model Channel {
+  id         String      @id @default(cuid())
+  type       ChannelType
+  name       String? // null for DMs
+  isReadOnly Boolean     @default(false)
+  branchId   String?
+  clusterId  String?
+  createdAt  DateTime    @default(now())
+
+  branch      Branch?             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  cluster     Cluster?            @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  memberships ChannelMembership[]
+  messages    Message[]
+
+  @@index([branchId])
+  @@index([clusterId])
+  @@index([type])
+}
+
+// Read state lives here: lastReadAt — one row per member per channel (CLAUDE.md §5).
+model ChannelMembership {
+  id         String      @id @default(cuid())
+  userId     String
+  channelId  String
+  role       ChannelRole @default(MEMBER)
+  lastReadAt DateTime?
+  joinedAt   DateTime    @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([channelId])
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  channelId String
+  senderId  String
+  type      MessageType @default(TEXT)
+  body      String?
+  mediaUrl  String? // Cloudinary URL; metadata in Media if catalogued
+
+  replyToId String?
+  replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies   Message[] @relation("MessageReplies")
+
+  // Pin is an audit/actor field — scalar, no back-relation (CLAUDE.md §5).
+  pinnedById String?
+  pinnedAt   DateTime?
+
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime? // soft delete
+
+  channel  Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  sender   User             @relation(fields: [senderId], references: [id])
+  reactions Reaction[]
+  receipts MessageReceipt[]
+
+  // Keyset pagination over (channelId, createdAt, id).
+  @@index([channelId, createdAt])
+  @@index([senderId])
+  @@index([replyToId])
+}
+
+// Per-message delivered/read — DMs ONLY (CLAUDE.md §5). Never write these for large channels.
+model MessageReceipt {
+  id          String    @id @default(cuid())
+  messageId   String
+  userId      String
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model Reaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+// ============================================================================
+// Growth pipeline (DATA, not code — CLAUDE.md §5 / §6.2)
+// ============================================================================
+
+model GrowthStage {
+  id    String         @id @default(cuid())
+  key   GrowthStageKey @unique
+  order Int            @unique
+  name  String
+
+  requirements GrowthRequirement[]
+  members      User[] // users currently at this stage (via User.currentStageId)
+}
+
+model GrowthRequirement {
+  id      String          @id @default(cuid())
+  key     String          @unique
+  label   String
+  type    RequirementType
+  stageId String
+
+  stage       GrowthStage             @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  completions RequirementCompletion[]
+  certificates Certificate[]
+
+  @@index([stageId])
+}
+
+model RequirementCompletion {
+  id            String          @id @default(cuid())
+  userId        String
+  requirementId String
+  source        RequirementType
+  verifiedById  String? // scalar audit field — who admin-verified (if applicable)
+  completedAt   DateTime        @default(now())
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requirement GrowthRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, requirementId])
+  @@index([requirementId])
+}
+
+model Badge {
+  id   String @id @default(cuid())
+  key  String @unique
+  name String
+  icon String
+
+  awardedTo UserBadge[]
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  badgeId   String
+  awardedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+  @@index([badgeId])
+}
+
+// Verification queue = Certificate where status = PENDING (CLAUDE.md §5) — a query, not a table.
+model Certificate {
+  id            String            @id @default(cuid())
+  userId        String
+  requirementId String?
+  title         String
+  fileUrl       String // Cloudinary
+  status        CertificateStatus @default(PENDING)
+  submittedAt   DateTime          @default(now())
+  verifiedById  String? // scalar audit field
+  verifiedAt    DateTime?
+  rejectionReason String?
+
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requirement GrowthRequirement? @relation(fields: [requirementId], references: [id])
+
+  @@index([status, submittedAt])
+  @@index([userId])
+}
+
+// ============================================================================
+// Events, media, audio, notifications, moderation
+// ============================================================================
+
+model Event {
+  id          String    @id @default(cuid())
+  branchId    String? // null = global event
+  title       String
+  description String?
+  location    String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  createdById String // scalar audit field
+  createdAt   DateTime  @default(now())
+
+  branch Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  rsvps  EventRSVP[]
+
+  @@index([branchId])
+  @@index([startsAt])
+}
+
+model EventRSVP {
+  id        String     @id @default(cuid())
+  eventId   String
+  userId    String
+  status    RsvpStatus @default(GOING)
+  createdAt DateTime   @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId])
+}
+
+// Sermons / media library. Store URLs, not files (CLAUDE.md §3). branchId is a scalar (lean).
+model Media {
+  id           String    @id @default(cuid())
+  type         MediaType
+  title        String?
+  description  String?
+  url          String
+  thumbnailUrl String?
+  branchId     String?
+  uploadedById String // scalar audit field
+  createdAt    DateTime  @default(now())
+
+  @@index([type])
+  @@index([branchId])
+}
+
+// Backend issues tokens + tracks roles only; never carries media (CLAUDE.md §3).
+model AudioRoom {
+  id             String          @id @default(cuid())
+  title          String
+  description    String?
+  branchId       String?
+  clusterId      String?
+  hostId         String // scalar audit field
+  status         AudioRoomStatus @default(SCHEDULED)
+  provider       String? // "agora" | "100ms"
+  externalRoomId String?
+  scheduledFor   DateTime?
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime        @default(now())
+
+  participants AudioRoomParticipant[]
+
+  @@index([status])
+}
+
+model AudioRoomParticipant {
+  id       String    @id @default(cuid())
+  roomId   String
+  userId   String
+  role     AudioRole @default(LISTENER) // ephemeral, session-scoped
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  room AudioRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String // recipient
+  type      NotificationType
+  title     String
+  body      String?
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+// Moderation/reporting is core, not optional (CLAUDE.md §9.1). Anything reportable lands here.
+model Report {
+  id          String           @id @default(cuid())
+  reporterId  String
+  targetType  ReportTargetType
+  targetId    String
+  reason      String
+  details     String?
+  status      ReportStatus     @default(OPEN)
+  handledById String? // scalar audit field
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+
+  reporter User @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+}
