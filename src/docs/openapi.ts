@@ -244,6 +244,44 @@ registry.registerPath({
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
+// ---- clusters ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/clusters',
+  tags: ['clusters'],
+  summary: 'List clusters (Recommended Clusters) with isMember + memberCount',
+  security: bearer,
+  responses: { 200: { description: 'Clusters', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/clusters/{clusterId}/join',
+  tags: ['clusters'],
+  summary: 'Join a cluster (also joins its chat channel)',
+  security: bearer,
+  request: { params: z.object({ clusterId: z.string() }) },
+  responses: { 200: { description: 'Joined', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/clusters/{clusterId}/leave',
+  tags: ['clusters'],
+  summary: 'Leave a cluster',
+  security: bearer,
+  request: { params: z.object({ clusterId: z.string() }) },
+  responses: { 200: { description: 'Left', ...json(okSchema) } },
+});
+
+// ---- growth ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/growth/me',
+  tags: ['growth'],
+  summary: 'My Journey summary: current stage, progress %, next action, stage checklist',
+  security: bearer,
+  responses: { 200: { description: 'Growth summary', ...json(z.object({}).passthrough()) } },
+});
+
 export function mountDocs(app: Express) {
   try {
     const generator = new OpenApiGeneratorV3(registry.definitions);

@@ -5,7 +5,8 @@ import { branchesRouter } from './modules/branches/branches.routes';
 import { mediaRouter } from './modules/media/media.routes';
 import { channelsRouter } from './modules/channels/channels.routes';
 import { messagesRouter } from './modules/chat/chat.routes';
-// import { clustersRouter } from './modules/clusters/clusters.routes';
+import { clustersRouter } from './modules/clusters/clusters.routes';
+import { growthRouter } from './modules/growth/growth.routes';
 // import { growthRouter } from './modules/growth/growth.routes';
 // import { eventsRouter } from './modules/events/events.routes';
 // import { mediaRouter } from './modules/media/media.routes';
@@ -20,6 +21,8 @@ router.use('/branches', branchesRouter);
 router.use('/media', mediaRouter);
 router.use('/channels', channelsRouter);
 router.use('/messages', messagesRouter);
+router.use('/clusters', clustersRouter);
+router.use('/growth', growthRouter);
 // Uncomment as each module is built:
 // router.use('/clusters', clustersRouter);
 // router.use('/growth', growthRouter);
