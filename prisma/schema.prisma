@@ -258,6 +258,7 @@ model Cluster {
 
   memberships ClusterMembership[]
   channels    Channel[]
+  events      Event[]
 }
 
 model ClusterMembership {
@@ -464,7 +465,8 @@ model Certificate {
 
 model Event {
   id          String    @id @default(cuid())
-  branchId    String? // null = global event
+  branchId    String? // branch event
+  clusterId   String? // cluster event; both null = global event
   title       String
   description String?
   location    String?
@@ -473,10 +475,12 @@ model Event {
   createdById String // scalar audit field
   createdAt   DateTime  @default(now())
 
-  branch Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  rsvps  EventRSVP[]
+  branch  Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  cluster Cluster?    @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  rsvps   EventRSVP[]
 
   @@index([branchId])
+  @@index([clusterId])
   @@index([startsAt])
 }
 
@@ -484,8 +488,9 @@ model EventRSVP {
   id        String     @id @default(cuid())
   eventId   String
   userId    String
-  status    RsvpStatus @default(GOING)
-  createdAt DateTime   @default(now())
+  status      RsvpStatus @default(GOING)
+  checkedInAt DateTime? // set on QR check-in at the event
+  createdAt   DateTime   @default(now())
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)

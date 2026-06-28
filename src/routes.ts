@@ -7,9 +7,7 @@ import { channelsRouter } from './modules/channels/channels.routes';
 import { messagesRouter } from './modules/chat/chat.routes';
 import { clustersRouter } from './modules/clusters/clusters.routes';
 import { growthRouter } from './modules/growth/growth.routes';
-// import { growthRouter } from './modules/growth/growth.routes';
-// import { eventsRouter } from './modules/events/events.routes';
-// import { mediaRouter } from './modules/media/media.routes';
+import { eventsRouter } from './modules/events/events.routes';
 // import { notificationsRouter } from './modules/notifications/notifications.routes';
 // import { adminRouter } from './modules/admin/admin.routes';
 
@@ -23,10 +21,7 @@ router.use('/channels', channelsRouter);
 router.use('/messages', messagesRouter);
 router.use('/clusters', clustersRouter);
 router.use('/growth', growthRouter);
+router.use('/events', eventsRouter);
 // Uncomment as each module is built:
-// router.use('/clusters', clustersRouter);
-// router.use('/growth', growthRouter);
-// router.use('/events', eventsRouter);
-// router.use('/media', mediaRouter);
 // router.use('/notifications', notificationsRouter);
 // router.use('/admin', adminRouter);

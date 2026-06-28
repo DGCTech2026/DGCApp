@@ -16,6 +16,7 @@ import { updateMeSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
 import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
+import { createEventSchema, rsvpSchema } from '../modules/events/events.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -280,6 +281,55 @@ registry.registerPath({
   summary: 'My Journey summary: current stage, progress %, next action, stage checklist',
   security: bearer,
   responses: { 200: { description: 'Growth summary', ...json(z.object({}).passthrough()) } },
+});
+
+// ---- events ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/events',
+  tags: ['events'],
+  summary: 'Upcoming events (global + my branches + my clusters) with my RSVP',
+  security: bearer,
+  responses: { 200: { description: 'Events', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/events',
+  tags: ['events'],
+  summary: 'Create an event (branch admin / cluster moderator / super admin)',
+  security: bearer,
+  request: { body: json(createEventSchema) },
+  responses: {
+    201: { description: 'Created event', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not permitted', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/events/{eventId}',
+  tags: ['events'],
+  summary: 'Event detail with RSVP counts + my RSVP/check-in',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }) },
+  responses: { 200: { description: 'Event', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/events/{eventId}/rsvp',
+  tags: ['events'],
+  summary: 'RSVP to an event',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }), body: json(rsvpSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/events/{eventId}/checkin',
+  tags: ['events'],
+  summary: 'Check in at an event (QR scan)',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }) },
+  responses: { 200: { description: 'Checked in', ...json(okSchema) } },
 });
 
 export function mountDocs(app: Express) {
