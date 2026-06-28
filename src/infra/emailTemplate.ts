@@ -2,8 +2,10 @@
 // don't support fl/grid). Keep a reusable layout so every email (OTP, welcome, notifications)
 // shares the DGC look. Banner is hosted on Cloudinary (email clients need a public URL).
 
+// f_auto = best format per client (WebP/AVIF, falls back to JPEG for Outlook), q_auto = smart
+// compression, w_1200 = 2× the 600px display width for retina. ~40–56% smaller, same image.
 const BANNER_URL =
-  'https://res.cloudinary.com/ph82hmab/image/upload/v1782625723/dgc/email/welcome-banner.jpg';
+  'https://res.cloudinary.com/ph82hmab/image/upload/f_auto,q_auto,w_1200/v1782625723/dgc/email/welcome-banner.jpg';
 const WEBSITE = 'https://www.davidicgenerationchurch.com';
 const PURPLE = '#5B2A86';
 
