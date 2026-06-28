@@ -7,6 +7,7 @@ import { isSmsConfigured } from '../../infra/sms';
 import { redis } from '../../infra/redis';
 import { growthEngine } from '../growth/growth.engine';
 import { onboardToBranch } from '../users/users.service';
+import { isDisposableEmail } from '../../utils/email';
 import type { RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
@@ -105,6 +106,9 @@ export const authService = {
   // created (fully populated + branch-onboarded) only when the code is verified.
   async register(input: RegisterInput) {
     const email = norm(input.email);
+    if (isDisposableEmail(email)) {
+      throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
+    }
     const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (existing) throw Conflict('An account with this email already exists. Sign in instead.');
 
@@ -168,6 +172,9 @@ export const authService = {
 
   async requestEmailOtp(email: string) {
     const id = norm(email);
+    if (isDisposableEmail(id)) {
+      throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
+    }
     const code = await createOtp(id, 'EMAIL');
     await emailQueue.add('send-otp', { type: 'otp', to: id, code });
   },

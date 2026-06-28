@@ -9,3 +9,4 @@ export const usersRouter = Router();
 
 usersRouter.get('/me', authenticate, asyncHandler(userController.getMe));
 usersRouter.patch('/me', authenticate, validate(updateMeSchema), asyncHandler(userController.updateMe));
+usersRouter.delete('/me', authenticate, asyncHandler(userController.deleteMe));

@@ -52,6 +52,7 @@
     "bullmq": "^5.79.1",
     "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
+    "disposable-email-domains": "^1.0.62",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "google-auth-library": "^10.9.0",

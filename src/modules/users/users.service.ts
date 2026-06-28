@@ -112,4 +112,17 @@ export const userService = {
     if (branchId) await onboardToBranch(userId, branchId);
     return this.getMe(userId);
   },
+
+  // Self-delete (hard purge) — removes the account + its data and frees the email/phone for reuse.
+  // Handy for testing; also a legit "delete my account" action.
+  async deleteMe(userId: string) {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.message.deleteMany({ where: { senderId: userId } }); // Message.senderId is RESTRICT
+        await tx.user.delete({ where: { id: userId } }); // cascades memberships, growth, badges, certs, tokens, etc.
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+    return { ok: true };
+  },
 };

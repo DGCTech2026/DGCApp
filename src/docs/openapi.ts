@@ -139,6 +139,14 @@ registry.registerPath({
     409: { description: 'Already assigned to a branch', ...json(errorSchema) },
   },
 });
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/users/me',
+  tags: ['users'],
+  summary: 'Delete my account (hard purge; frees the email/phone for reuse)',
+  security: bearer,
+  responses: { 200: { description: 'Deleted', ...json(okSchema) } },
+});
 
 // ---- branches ----
 registry.registerPath({

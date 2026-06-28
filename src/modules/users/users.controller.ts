@@ -9,4 +9,8 @@ export const userController = {
   async updateMe(req: Request, res: Response) {
     res.json(await userService.updateMe(req.user!.sub, req.body));
   },
+
+  async deleteMe(req: Request, res: Response) {
+    res.json(await userService.deleteMe(req.user!.sub));
+  },
 };
