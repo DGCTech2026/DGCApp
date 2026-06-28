@@ -13,6 +13,7 @@ import {
   refreshTokenSchema,
 } from '../modules/auth/auth.schema';
 import { updateMeSchema } from '../modules/users/users.schema';
+import { uploadSignatureSchema } from '../modules/media/media.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -133,6 +134,32 @@ registry.registerPath({
   responses: {
     200: { description: 'Branch', ...json(branchSchema) },
     404: { description: 'Not found', ...json(errorSchema) },
+  },
+});
+
+// ---- media ----
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/media/signature',
+  tags: ['media'],
+  summary: 'Get Cloudinary signed-upload params; client uploads directly, then sends back the URL',
+  security: bearer,
+  request: { body: json(uploadSignatureSchema) },
+  responses: {
+    200: {
+      description: 'Signed upload params',
+      ...json(
+        z.object({
+          cloudName: z.string(),
+          apiKey: z.string(),
+          timestamp: z.number(),
+          folder: z.string(),
+          signature: z.string(),
+          uploadUrl: z.string(),
+        }),
+      ),
+    },
+    401: { description: 'Unauthorized', ...json(errorSchema) },
   },
 });
 
