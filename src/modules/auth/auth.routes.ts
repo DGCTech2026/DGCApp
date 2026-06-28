@@ -3,12 +3,20 @@ import { validate } from '../../middleware/validate';
 import { authenticate } from '../../middleware/authenticate';
 import { otpRequestRateLimit } from '../../middleware/rateLimit';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { requestOtpSchema, verifyOtpSchema, refreshTokenSchema, googleAuthSchema } from './auth.schema';
+import {
+  requestOtpSchema,
+  verifyOtpSchema,
+  requestPhoneOtpSchema,
+  verifyPhoneOtpSchema,
+  googleAuthSchema,
+  appleAuthSchema,
+  refreshTokenSchema,
+} from './auth.schema';
 import { authController } from './auth.controller';
 
 export const authRouter = Router();
 
-// Public
+// Email OTP (public)
 authRouter.post(
   '/email/request-otp',
   validate(requestOtpSchema),
@@ -16,8 +24,20 @@ authRouter.post(
   asyncHandler(authController.requestOtp),
 );
 authRouter.post('/email/verify-otp', validate(verifyOtpSchema), asyncHandler(authController.verifyOtp));
-authRouter.post('/google', validate(googleAuthSchema), asyncHandler(authController.google));
-authRouter.post('/refresh', validate(refreshTokenSchema), asyncHandler(authController.refresh));
 
-// Authenticated
+// Phone OTP (public) — gated on SMS provider config
+authRouter.post(
+  '/phone/request-otp',
+  validate(requestPhoneOtpSchema),
+  otpRequestRateLimit,
+  asyncHandler(authController.requestPhoneOtp),
+);
+authRouter.post('/phone/verify-otp', validate(verifyPhoneOtpSchema), asyncHandler(authController.verifyPhoneOtp));
+
+// OAuth (public)
+authRouter.post('/google', validate(googleAuthSchema), asyncHandler(authController.google));
+authRouter.post('/apple', validate(appleAuthSchema), asyncHandler(authController.apple));
+
+// Tokens
+authRouter.post('/refresh', validate(refreshTokenSchema), asyncHandler(authController.refresh));
 authRouter.post('/logout', authenticate, validate(refreshTokenSchema), asyncHandler(authController.logout));

@@ -6,5 +6,6 @@ import { env } from '../config/env';
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 
 export const emailQueue = new Queue('email', { connection });
+export const smsQueue = new Queue('sms', { connection });
 export const notificationQueue = new Queue('notification', { connection });
 export const growthQueue = new Queue('growth', { connection });

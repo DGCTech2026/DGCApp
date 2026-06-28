@@ -3,7 +3,7 @@ import { env } from '../config/env';
 
 export interface AccessTokenPayload {
   sub: string;
-  email: string;
+  email?: string; // absent for phone-only accounts
   role: string;
 }
 

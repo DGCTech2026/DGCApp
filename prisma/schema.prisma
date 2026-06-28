@@ -31,6 +31,11 @@ enum Gender {
   OTHER
 }
 
+enum OtpChannel {
+  EMAIL
+  SMS
+}
+
 enum BranchRole {
   MEMBER
   ADMIN
@@ -146,13 +151,15 @@ enum ReportStatus {
 
 model User {
   id          String     @id @default(cuid())
-  email       String     @unique
+  // Identity: a user signs up by email OR phone (OR Google/Apple, which carry an email).
+  // Both are nullable+unique so a phone-only or email-only account is valid.
+  email       String?    @unique
   globalRole  GlobalRole @default(MEMBER)
 
   // Profile
   displayName String?
   avatarUrl   String?
-  phoneNumber String? // PRD wants phone sign-up; phone OTP deferred (CLAUDE.md §10) — field kept for profile
+  phoneNumber String? @unique
   gender      Gender?
   dateOfBirth DateTime? // used for safeguarding / minor handling (CLAUDE.md §9.1)
   occupation  String?
@@ -187,13 +194,14 @@ model User {
   @@index([deletedAt])
 }
 
-// One row per email; only a HASH of the OTP is stored (CLAUDE.md §9).
+// One row per identifier (email or E.164 phone); only a HASH of the OTP is stored (CLAUDE.md §9).
 model Otp {
-  email     String   @id
-  hash      String
-  expiresAt DateTime
-  attempts  Int      @default(0)
-  createdAt DateTime @default(now())
+  identifier String     @id // email or phone, normalised (trim + lowercase)
+  channel    OtpChannel @default(EMAIL)
+  hash       String
+  expiresAt  DateTime
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now())
 }
 
 // Only HASHES of refresh tokens are stored; supports rotation + revocation.

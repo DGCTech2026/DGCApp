@@ -3,7 +3,7 @@ import { authService } from './auth.service';
 
 export const authController = {
   async requestOtp(req: Request, res: Response) {
-    await authService.requestOtp(req.body.email);
+    await authService.requestEmailOtp(req.body.email);
     res.json({ ok: true });
   },
 
@@ -12,8 +12,23 @@ export const authController = {
     res.json(tokens);
   },
 
+  async requestPhoneOtp(req: Request, res: Response) {
+    await authService.requestPhoneOtp(req.body.phone);
+    res.json({ ok: true });
+  },
+
+  async verifyPhoneOtp(req: Request, res: Response) {
+    const tokens = await authService.verifyOtp(req.body.phone, req.body.code);
+    res.json(tokens);
+  },
+
   async google(req: Request, res: Response) {
     const tokens = await authService.googleAuth(req.body.idToken);
+    res.json(tokens);
+  },
+
+  async apple(req: Request, res: Response) {
+    const tokens = await authService.appleAuth(req.body.idToken);
     res.json(tokens);
   },
 

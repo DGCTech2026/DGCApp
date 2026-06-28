@@ -17,6 +17,10 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   APPLE_CLIENT_ID: z.string().optional(),
   CLOUDINARY_URL: z.string().optional(),
+  // SMS (phone OTP) — optional; phone sign-in stays disabled until set. Termii (NG) by default.
+  TERMII_API_KEY: z.string().optional(),
+  TERMII_SENDER_ID: z.string().default('DGC'),
+  TERMII_BASE_URL: z.string().default('https://api.ng.termii.com'),
   CORS_ORIGIN: z.string().default('*'),
 });
 

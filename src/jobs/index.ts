@@ -1,5 +1,6 @@
 import { logger } from '../infra/logger';
 import './workers/email.worker';
+import './workers/sms.worker';
 import './workers/notification.worker';
 import './workers/growth.worker';
 
