@@ -16,5 +16,14 @@ export const verifyPhoneOtpSchema = z.object({ phone: e164, code: z.string().len
 export const googleAuthSchema = z.object({ idToken: z.string().min(1) });
 export const appleAuthSchema = z.object({ idToken: z.string().min(1) });
 
+// Password
+export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+export const setPasswordSchema = z.object({ password: z.string().min(8).max(128) });
+export const resetPasswordSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+  newPassword: z.string().min(8).max(128),
+});
+
 // Tokens
 export const refreshTokenSchema = z.object({ refreshToken: z.string().min(1) });

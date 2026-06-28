@@ -7,7 +7,7 @@ import { isSmsConfigured } from '../../infra/sms';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
 import { hashValue, verifyHash } from '../../utils/hash';
-import { BadRequest, Unauthorized } from '../../utils/errors';
+import { BadRequest, Unauthorized, Forbidden } from '../../utils/errors';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -15,9 +15,19 @@ const googleClient = new OAuth2Client();
 
 const norm = (s: string) => s.trim().toLowerCase();
 
-type TokenUser = { id: string; email: string | null; globalRole: string };
+type TokenUser = {
+  id: string;
+  email: string | null;
+  globalRole: string;
+  suspendedAt?: Date | null;
+  deletedAt?: Date | null;
+};
 
+// Single chokepoint for token issuance → a suspended or deleted account can't get tokens via ANY
+// path (login, OTP, Google, Apple, refresh). This is what gives admin suspend real teeth.
 async function issueTokensFor(user: TokenUser) {
+  if (user.deletedAt) throw Unauthorized('Account not found');
+  if (user.suspendedAt) throw Forbidden('Your account has been suspended');
   const refreshToken = signRefreshToken(user.id);
   await prisma.refreshToken.create({ data: { userId: user.id, hash: await hashValue(refreshToken) } });
   const accessToken = signAccessToken({
@@ -36,7 +46,7 @@ async function ensureUser(
 ): Promise<{ user: TokenUser; isNew: boolean }> {
   const existing = await prisma.user.findUnique({
     where,
-    select: { id: true, email: true, globalRole: true },
+    select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
   });
   if (existing) return { user: existing, isNew: false };
 
@@ -44,14 +54,14 @@ async function ensureUser(
   try {
     const user = await prisma.user.create({
       data: { ...create, ...(firstTimer ? { currentStageId: firstTimer.id } : {}) },
-      select: { id: true, email: true, globalRole: true },
+      select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
     });
     return { user, isNew: true };
   } catch {
     // Race: created between our check and create — fetch and treat as existing.
     const user = await prisma.user.findUniqueOrThrow({
       where,
-      select: { id: true, email: true, globalRole: true },
+      select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
     });
     return { user, isNew: false };
   }
@@ -167,8 +177,54 @@ export const authService = {
 
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: payload.sub },
-      select: { id: true, email: true, globalRole: true },
+      select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
     });
+    return issueTokensFor(user);
+  },
+
+  async login(email: string, password: string) {
+    const id = norm(email);
+    const user = await prisma.user.findUnique({
+      where: { email: id },
+      select: { id: true, email: true, globalRole: true, passwordHash: true, suspendedAt: true, deletedAt: true },
+    });
+    if (!user || user.deletedAt) throw Unauthorized('Invalid email or password');
+    if (!user.passwordHash) {
+      throw BadRequest('No password set for this account. Sign in with a code or Google/Apple, or set a password.');
+    }
+    const ok = await verifyHash(user.passwordHash, password).catch(() => false);
+    if (!ok) throw Unauthorized('Invalid email or password');
+    return issueTokensFor(user); // also enforces suspended/deleted
+  },
+
+  // Set or change the password for the authenticated user (used during registration too).
+  async setPassword(userId: string, password: string) {
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashValue(password) } });
+    return { ok: true };
+  },
+
+  // Forgot-password: client first calls /auth/email/request-otp, then this with the code + new password.
+  async resetPassword(email: string, code: string, newPassword: string) {
+    const id = norm(email);
+    const record = await prisma.otp.findUnique({ where: { identifier: id } });
+    if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+    if (record.attempts >= MAX_OTP_ATTEMPTS) {
+      await prisma.otp.delete({ where: { identifier: id } });
+      throw BadRequest('Too many attempts. Request a new code.');
+    }
+    const valid = await verifyOtpHash(record.hash, code);
+    if (!valid) {
+      await prisma.otp.update({ where: { identifier: id }, data: { attempts: { increment: 1 } } });
+      throw BadRequest('Invalid OTP');
+    }
+    await prisma.otp.delete({ where: { identifier: id } });
+
+    const user = await prisma.user.findUnique({
+      where: { email: id },
+      select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
+    });
+    if (!user) throw BadRequest('No account found for this email');
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashValue(newPassword) } });
     return issueTokensFor(user);
   },
 

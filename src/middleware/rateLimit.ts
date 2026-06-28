@@ -1,5 +1,11 @@
 import type { RequestHandler } from 'express';
-import { otpResendLimiter, otpEmailDailyLimiter, otpIpLimiter } from '../infra/rateLimit';
+import {
+  otpResendLimiter,
+  otpEmailDailyLimiter,
+  otpIpLimiter,
+  loginEmailLimiter,
+  loginIpLimiter,
+} from '../infra/rateLimit';
 import { TooManyRequests } from '../utils/errors';
 
 // Guards OTP request (email or phone): per-IP hourly, per-identifier resend cooldown + daily cap.
@@ -16,5 +22,18 @@ export const otpRequestRateLimit: RequestHandler = async (req, _res, next) => {
     next();
   } catch {
     next(TooManyRequests('Too many OTP requests. Please wait and try again.'));
+  }
+};
+
+// Guards password login: per-IP + per-email attempt caps (brute-force protection).
+export const loginRateLimit: RequestHandler = async (req, _res, next) => {
+  const email = String(req.body?.email ?? '').toLowerCase();
+  const ip = req.ip ?? 'unknown';
+  try {
+    await loginIpLimiter.consume(ip);
+    if (email) await loginEmailLimiter.consume(email);
+    next();
+  } catch {
+    next(TooManyRequests('Too many login attempts. Please wait and try again.'));
   }
 };

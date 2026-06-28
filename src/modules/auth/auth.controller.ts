@@ -37,6 +37,18 @@ export const authController = {
     res.json(tokens);
   },
 
+  async login(req: Request, res: Response) {
+    res.json(await authService.login(req.body.email, req.body.password));
+  },
+
+  async setPassword(req: Request, res: Response) {
+    res.json(await authService.setPassword(req.user!.sub, req.body.password));
+  },
+
+  async resetPassword(req: Request, res: Response) {
+    res.json(await authService.resetPassword(req.body.email, req.body.code, req.body.newPassword));
+  },
+
   async logout(req: Request, res: Response) {
     if (req.user) await authService.logout(req.user.sub, req.body.refreshToken);
     res.json({ ok: true });

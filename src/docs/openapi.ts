@@ -10,6 +10,9 @@ import {
   verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
+  loginSchema,
+  setPasswordSchema,
+  resetPasswordSchema,
   refreshTokenSchema,
 } from '../modules/auth/auth.schema';
 import { updateMeSchema } from '../modules/users/users.schema';
@@ -65,6 +68,8 @@ const publicAuth: [string, string, z.ZodTypeAny, z.ZodTypeAny][] = [
   ['/api/v1/auth/phone/verify-otp', 'Verify a phone OTP and receive tokens', verifyPhoneOtpSchema, tokenSchema],
   ['/api/v1/auth/google', 'Sign in with a Google ID token', googleAuthSchema, tokenSchema],
   ['/api/v1/auth/apple', 'Sign in with an Apple ID token (needs Apple config)', appleAuthSchema, tokenSchema],
+  ['/api/v1/auth/login', 'Sign in with email + password (rate-limited)', loginSchema, tokenSchema],
+  ['/api/v1/auth/reset-password', 'Reset password using an email OTP code', resetPasswordSchema, tokenSchema],
   ['/api/v1/auth/refresh', 'Rotate refresh token for a new token pair', refreshTokenSchema, tokenSchema],
 ];
 for (const [path, summary, body, ok] of publicAuth) {
@@ -82,6 +87,16 @@ for (const [path, summary, body, ok] of publicAuth) {
     },
   });
 }
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/auth/password',
+  tags: ['auth'],
+  summary: 'Set or change your password',
+  security: bearer,
+  request: { body: json(setPasswordSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
 
 registry.registerPath({
   method: 'post',

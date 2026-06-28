@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../../middleware/validate';
 import { authenticate } from '../../middleware/authenticate';
-import { otpRequestRateLimit } from '../../middleware/rateLimit';
+import { otpRequestRateLimit, loginRateLimit } from '../../middleware/rateLimit';
 import { asyncHandler } from '../../utils/asyncHandler';
 import {
   requestOtpSchema,
@@ -10,6 +10,9 @@ import {
   verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
+  loginSchema,
+  setPasswordSchema,
+  resetPasswordSchema,
   refreshTokenSchema,
 } from './auth.schema';
 import { authController } from './auth.controller';
@@ -37,6 +40,11 @@ authRouter.post('/phone/verify-otp', validate(verifyPhoneOtpSchema), asyncHandle
 // OAuth (public)
 authRouter.post('/google', validate(googleAuthSchema), asyncHandler(authController.google));
 authRouter.post('/apple', validate(appleAuthSchema), asyncHandler(authController.apple));
+
+// Password (public login + reset; set/change requires auth)
+authRouter.post('/login', validate(loginSchema), loginRateLimit, asyncHandler(authController.login));
+authRouter.post('/reset-password', validate(resetPasswordSchema), asyncHandler(authController.resetPassword));
+authRouter.post('/password', authenticate, validate(setPasswordSchema), asyncHandler(authController.setPassword));
 
 // Tokens
 authRouter.post('/refresh', validate(refreshTokenSchema), asyncHandler(authController.refresh));
