@@ -1,0 +1,63 @@
+// Email-client-safe HTML (table layout + inline styles — Gmail/Outlook strip <style> and
+// don't support fl/grid). Keep a reusable layout so every email (OTP, welcome, notifications)
+// shares the DGC look. Banner is hosted on Cloudinary (email clients need a public URL).
+
+const BANNER_URL =
+  'https://res.cloudinary.com/ph82hmab/image/upload/v1782625723/dgc/email/welcome-banner.jpg';
+const WEBSITE = 'https://www.davidicgenerationchurch.com';
+const PURPLE = '#5B2A86';
+
+export function renderEmailLayout(opts: { preheader: string; contentHtml: string }): string {
+  const year = new Date().getFullYear();
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>Davidic Generation Church</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;-webkit-font-smoothing:antialiased;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#f4f4f7;">${opts.preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f7;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #ececf1;">
+      <tr><td style="padding:0;">
+        <img src="${BANNER_URL}" width="600" alt="Davidic Generation Church" style="display:block;width:100%;max-width:600px;height:auto;border:0;outline:none;text-decoration:none;">
+      </td></tr>
+      <tr><td style="height:4px;background-color:${PURPLE};font-size:0;line-height:0;">&nbsp;</td></tr>
+      <tr><td style="padding:36px 40px 8px 40px;font-family:Arial,Helvetica,sans-serif;">${opts.contentHtml}</td></tr>
+      <tr><td style="padding:24px 40px 32px 40px;font-family:Arial,Helvetica,sans-serif;border-top:1px solid #eeeeee;">
+        <p style="margin:0;color:#9ca3af;font-size:12px;line-height:18px;">
+          Davidic Generation Church &middot; <a href="${WEBSITE}" style="color:${PURPLE};text-decoration:none;">davidicgenerationchurch.com</a><br>
+          You received this because a sign-in code was requested for this email address. If that wasn't you, you can safely ignore it.
+        </p>
+        <p style="margin:12px 0 0 0;color:#cbd5e1;font-size:12px;">&copy; ${year} Davidic Generation Church. All rights reserved.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>`;
+}
+
+export function otpEmail(code: string): { subject: string; html: string; text: string } {
+  const contentHtml = `
+    <h1 style="margin:0 0 12px 0;color:#1f2937;font-size:22px;font-weight:bold;">Verify your email</h1>
+    <p style="margin:0 0 24px 0;color:#4b5563;font-size:15px;line-height:22px;">Use the verification code below to continue signing in to your DGC account.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td align="center" style="padding:4px 0;">
+        <div style="display:inline-block;background-color:#f3eefb;border:1px solid #e5d9f7;border-radius:10px;padding:18px 30px;">
+          <span style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:bold;letter-spacing:10px;color:${PURPLE};">${code}</span>
+        </div>
+      </td></tr>
+    </table>
+    <p style="margin:20px 0 0 0;color:#6b7280;font-size:14px;line-height:20px;text-align:center;">This code expires in <strong>10 minutes</strong>.</p>
+    <p style="margin:24px 0 0 0;color:#9ca3af;font-size:13px;line-height:20px;">Didn't request this code? You can safely ignore this email — your account stays secure.</p>`;
+
+  return {
+    subject: 'Your DGC verification code',
+    html: renderEmailLayout({ preheader: `Your DGC code is ${code} (expires in 10 minutes).`, contentHtml }),
+    text: `Your DGC verification code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, you can safely ignore this email.\n\n— Davidic Generation Church\ndavidicgenerationchurch.com`,
+  };
+}
