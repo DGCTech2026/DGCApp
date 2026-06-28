@@ -191,6 +191,7 @@ The app has a Teenagers cluster and minors in chat/DMs. Treat child safety as a 
 - **`db.ts` singleton** must use the Prisma 7 `PrismaPg` adapter pattern (the original scaffold used the old bare-client form).
 - **PgBouncer** — add pooled `DATABASE_URL` (transaction mode) + direct `DIRECT_URL` before scaling to multiple instances.
 - **Dev vs prod databases** — separate Render databases before launch; never point dev and prod at the same one.
+- **Brevo domain authentication** — OTP emails land in spam because mail sends from Brevo's shared `*.brevosend.com` subdomain, not `davidicgenerationchurch.com` (domain not authenticated). Add SPF/DKIM/DMARC + the Brevo verification record in DNS, verify in the Brevo dashboard. Launch-blocker for reliable auth email.
 
 ---
 

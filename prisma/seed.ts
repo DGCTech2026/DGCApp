@@ -16,10 +16,12 @@ const prisma = new PrismaClient({ adapter });
 // ---- config data (the pipeline lives here, not in code) ----
 
 const BRANCHES = [
-  { name: 'DGC Abuja', city: 'Abuja' },
-  { name: 'DGC Lagos', city: 'Lagos' },
-  { name: 'DGC Ibadan', city: 'Ibadan' },
-  { name: 'DGC Port Harcourt', city: 'Port Harcourt' },
+  { name: 'DGC Abuja', city: 'Abuja', country: 'Nigeria' },
+  { name: 'DGC Lagos', city: 'Lagos', country: 'Nigeria' },
+  { name: 'DGC Ibadan', city: 'Ibadan', country: 'Nigeria' },
+  { name: 'DGC Port Harcourt', city: 'Port Harcourt', country: 'Nigeria' },
+  { name: 'DGC United Kingdom', city: 'London', country: 'United Kingdom' },
+  { name: 'DGC Australia', city: 'Sydney', country: 'Australia' },
 ];
 
 const BRANCH_SECTIONS = [
@@ -123,7 +125,11 @@ async function main() {
   const branches = [];
   for (const b of BRANCHES) {
     branches.push(
-      await prisma.branch.upsert({ where: { name: b.name }, update: { city: b.city }, create: b }),
+      await prisma.branch.upsert({
+        where: { name: b.name },
+        update: { city: b.city, country: b.country },
+        create: b,
+      }),
     );
   }
 

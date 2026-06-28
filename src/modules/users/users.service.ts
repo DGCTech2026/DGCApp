@@ -68,9 +68,39 @@ export const userService = {
   },
 
   async updateMe(userId: string, data: UpdateMeInput) {
-    const { branchId, ...profile } = data;
-    if (Object.keys(profile).length > 0) {
-      await prisma.user.update({ where: { id: userId }, data: profile });
+    const { branchId, email, phoneNumber, ...profile } = data;
+    const updates: Record<string, unknown> = { ...profile };
+
+    // Contact additions: fill in the channel the user didn't sign up with. Only settable when
+    // empty (changing a verified identity needs re-verification — a later slice), and unique.
+    if (email !== undefined || phoneNumber !== undefined) {
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { email: true, phoneNumber: true },
+      });
+      if (email !== undefined) {
+        const e = email.toLowerCase();
+        if (current.email && current.email !== e) throw Conflict('Email is already set on this account');
+        if (!current.email) {
+          const taken = await prisma.user.findUnique({ where: { email: e }, select: { id: true } });
+          if (taken && taken.id !== userId) throw Conflict('That email is already in use');
+          updates.email = e;
+        }
+      }
+      if (phoneNumber !== undefined) {
+        if (current.phoneNumber && current.phoneNumber !== phoneNumber) {
+          throw Conflict('Phone number is already set on this account');
+        }
+        if (!current.phoneNumber) {
+          const taken = await prisma.user.findUnique({ where: { phoneNumber }, select: { id: true } });
+          if (taken && taken.id !== userId) throw Conflict('That phone number is already in use');
+          updates.phoneNumber = phoneNumber;
+        }
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await prisma.user.update({ where: { id: userId }, data: updates });
     }
     if (branchId) await onboardToBranch(userId, branchId);
     return this.getMe(userId);
