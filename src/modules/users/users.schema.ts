@@ -13,6 +13,7 @@ export const updateMeSchema = z
     displayName: z.string().min(1).max(100).optional(),
     email: z.string().email().optional(),
     phoneNumber: e164.optional(),
+    password: z.string().min(8).max(128).optional(), // set during Step 1 registration, in one call
     gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
     dateOfBirth: z.coerce.date().optional(),
     occupation: z.string().max(120).optional(),

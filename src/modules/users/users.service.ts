@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Conflict } from '../../utils/errors';
+import { hashValue } from '../../utils/hash';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -72,8 +73,10 @@ export const userService = {
   },
 
   async updateMe(userId: string, data: UpdateMeInput) {
-    const { branchId, email, phoneNumber, ...profile } = data;
+    const { branchId, email, phoneNumber, password, ...profile } = data;
     const updates: Record<string, unknown> = { ...profile };
+    // Password can be set in the same call (registration submits it with the Step 1 profile).
+    if (password) updates.passwordHash = await hashValue(password);
 
     // Contact additions: fill in the channel the user didn't sign up with. Only settable when
     // empty (changing a verified identity needs re-verification — a later slice), and unique.

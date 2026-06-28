@@ -40,3 +40,17 @@ export const loginIpLimiter = new RateLimiterRedis({
   points: 50,
   duration: 60 * 15,
 });
+
+// Password-reset (forgot password) guards — separate from login so the two don't interfere.
+export const passwordResetEmailLimiter = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: 'pwreset_email',
+  points: 5,
+  duration: 60 * 15,
+});
+export const passwordResetIpLimiter = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: 'pwreset_ip',
+  points: 20,
+  duration: 60 * 15,
+});

@@ -5,6 +5,8 @@ import {
   otpIpLimiter,
   loginEmailLimiter,
   loginIpLimiter,
+  passwordResetEmailLimiter,
+  passwordResetIpLimiter,
 } from '../infra/rateLimit';
 import { TooManyRequests } from '../utils/errors';
 
@@ -35,5 +37,18 @@ export const loginRateLimit: RequestHandler = async (req, _res, next) => {
     next();
   } catch {
     next(TooManyRequests('Too many login attempts. Please wait and try again.'));
+  }
+};
+
+// Guards forgot/reset-password: per-IP + per-email caps.
+export const passwordResetRateLimit: RequestHandler = async (req, _res, next) => {
+  const email = String(req.body?.email ?? '').toLowerCase();
+  const ip = req.ip ?? 'unknown';
+  try {
+    await passwordResetIpLimiter.consume(ip);
+    if (email) await passwordResetEmailLimiter.consume(email);
+    next();
+  } catch {
+    next(TooManyRequests('Too many password reset attempts. Please wait and try again.'));
   }
 };
