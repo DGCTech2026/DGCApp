@@ -17,6 +17,7 @@ import { uploadSignatureSchema } from '../modules/media/media.schema';
 import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, rsvpSchema } from '../modules/events/events.schema';
+import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -330,6 +331,79 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ eventId: z.string() }) },
   responses: { 200: { description: 'Checked in', ...json(okSchema) } },
+});
+
+// ---- notifications ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/notifications',
+  tags: ['notifications'],
+  summary: 'List my notifications + unread count',
+  security: bearer,
+  responses: { 200: { description: 'Notifications', ...json(z.object({ items: z.array(z.object({}).passthrough()), unreadCount: z.number() })) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/notifications/read-all',
+  tags: ['notifications'],
+  summary: 'Mark all my notifications read',
+  security: bearer,
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/notifications/{id}/read',
+  tags: ['notifications'],
+  summary: 'Mark a notification read',
+  security: bearer,
+  request: { params: z.object({ id: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+
+// ---- admin (super admin only) ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/analytics',
+  tags: ['admin'],
+  summary: 'Dashboard analytics: counts, branch + leadership-pipeline breakdowns',
+  security: bearer,
+  responses: { 200: { description: 'Analytics', ...json(z.object({}).passthrough()) }, 403: { description: 'Super admin only', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/users',
+  tags: ['admin'],
+  summary: 'List/search members',
+  security: bearer,
+  request: { query: z.object({ search: z.string().optional() }) },
+  responses: { 200: { description: 'Users', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/users/{userId}/role',
+  tags: ['admin'],
+  summary: 'Set a user global role',
+  security: bearer,
+  request: { params: z.object({ userId: z.string() }), body: json(setRoleSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/branches',
+  tags: ['admin'],
+  summary: 'Create a branch (auto-provisions section channels)',
+  security: bearer,
+  request: { body: json(createBranchSchema) },
+  responses: { 201: { description: 'Branch', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/branches/{branchId}/admins',
+  tags: ['admin'],
+  summary: 'Assign a branch admin',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string() }), body: json(assignUserSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
 export function mountDocs(app: Express) {

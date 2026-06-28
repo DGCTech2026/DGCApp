@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
 
@@ -20,7 +21,8 @@ export const channelService = {
     return membership;
   },
 
-  // The Chats list: every channel the user belongs to, with last message + unread count.
+  // The Chats list. Batched (not N+1): one grouped unread query honouring each channel's lastReadAt,
+  // one DISTINCT ON for the last message, one for DM peers — ~4 queries regardless of channel count.
   async listMine(userId: string) {
     const memberships = await prisma.channelMembership.findMany({
       where: { userId },
@@ -28,53 +30,58 @@ export const channelService = {
         role: true,
         lastReadAt: true,
         channel: {
-          select: {
-            ...CHANNEL_SELECT,
-            branch: { select: { name: true } },
-            cluster: { select: { name: true } },
-          },
+          select: { ...CHANNEL_SELECT, branch: { select: { name: true } }, cluster: { select: { name: true } } },
         },
       },
     });
+    if (memberships.length === 0) return [];
+    const channelIds = memberships.map((m) => m.channel.id);
 
-    const items = await Promise.all(
-      memberships.map(async (m) => {
-        const ch = m.channel;
-        const [lastMessage, unreadCount, dmPeer] = await Promise.all([
-          prisma.message.findFirst({
-            where: { channelId: ch.id, deletedAt: null },
-            orderBy: { createdAt: 'desc' },
-            select: { id: true, body: true, type: true, senderId: true, createdAt: true },
-          }),
-          prisma.message.count({
-            where: {
-              channelId: ch.id,
-              deletedAt: null,
-              senderId: { not: userId },
-              ...(m.lastReadAt ? { createdAt: { gt: m.lastReadAt } } : {}),
-            },
-          }),
-          ch.type === 'DM'
-            ? prisma.channelMembership.findFirst({
-                where: { channelId: ch.id, userId: { not: userId } },
-                select: { user: { select: { id: true, displayName: true, avatarUrl: true } } },
-              })
-            : Promise.resolve(null),
-        ]);
-        return {
-          id: ch.id,
-          type: ch.type,
-          name: ch.name ?? ch.branch?.name ?? ch.cluster?.name ?? dmPeer?.user.displayName ?? null,
-          isReadOnly: ch.isReadOnly,
-          role: m.role,
-          lastReadAt: m.lastReadAt,
-          unreadCount,
-          lastMessage,
-          peer: dmPeer?.user ?? null,
-        };
-      }),
-    );
+    const unreadRows = await prisma.$queryRaw<{ channelId: string; count: number }[]>`
+      SELECT cm."channelId", COUNT(m."id")::int AS count
+      FROM "ChannelMembership" cm
+      JOIN "Message" m
+        ON m."channelId" = cm."channelId"
+       AND m."deletedAt" IS NULL
+       AND m."senderId" <> cm."userId"
+       AND (cm."lastReadAt" IS NULL OR m."createdAt" > cm."lastReadAt")
+      WHERE cm."userId" = ${userId}
+      GROUP BY cm."channelId"`;
+    const unreadMap = new Map(unreadRows.map((r) => [r.channelId, r.count]));
 
+    const lastRows = await prisma.$queryRaw<
+      { id: string; channelId: string; body: string | null; type: string; senderId: string; createdAt: Date }[]
+    >`
+      SELECT DISTINCT ON (m."channelId") m."id", m."channelId", m."body", m."type", m."senderId", m."createdAt"
+      FROM "Message" m
+      WHERE m."channelId" IN (${Prisma.join(channelIds)}) AND m."deletedAt" IS NULL
+      ORDER BY m."channelId", m."createdAt" DESC, m."id" DESC`;
+    const lastMap = new Map(lastRows.map((r) => [r.channelId, r]));
+
+    const dmIds = memberships.filter((m) => m.channel.type === 'DM').map((m) => m.channel.id);
+    const peers = dmIds.length
+      ? await prisma.channelMembership.findMany({
+          where: { channelId: { in: dmIds }, userId: { not: userId } },
+          select: { channelId: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
+        })
+      : [];
+    const peerMap = new Map(peers.map((p) => [p.channelId, p.user]));
+
+    const items = memberships.map((m) => {
+      const ch = m.channel;
+      const peer = peerMap.get(ch.id) ?? null;
+      return {
+        id: ch.id,
+        type: ch.type,
+        name: ch.name ?? ch.branch?.name ?? ch.cluster?.name ?? peer?.displayName ?? null,
+        isReadOnly: ch.isReadOnly,
+        role: m.role,
+        lastReadAt: m.lastReadAt,
+        unreadCount: unreadMap.get(ch.id) ?? 0,
+        lastMessage: lastMap.get(ch.id) ?? null,
+        peer,
+      };
+    });
     items.sort(
       (a, b) => (b.lastMessage?.createdAt?.getTime() ?? 0) - (a.lastMessage?.createdAt?.getTime() ?? 0),
     );

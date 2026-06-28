@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { channelService } from '../channels/channels.service';
+import { notificationService } from '../notifications/notifications.service';
 import { emitToChannel } from '../../infra/realtime';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
@@ -42,7 +43,10 @@ export const chatService = {
     if (!dto.body && !dto.mediaUrl) throw BadRequest('A message needs a body or mediaUrl');
     const membership = await channelService.requireMember(userId, role, channelId);
 
-    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { isReadOnly: true } });
+    const channel = await prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { isReadOnly: true, type: true },
+    });
     if (!channel) throw NotFound('Channel not found');
     if (channel.isReadOnly && !isModerator(role, membership?.role)) {
       throw Forbidden('This channel is read-only');
@@ -68,6 +72,23 @@ export const chatService = {
       select: MESSAGE_SELECT,
     });
     emitToChannel(channelId, 'message:new', message);
+
+    // DM = one recipient → safe to notify inline. Group/channel fan-out (many recipients) must go
+    // through the BullMQ notification worker instead — never loop-notify a whole channel here.
+    if (channel.type === 'DM') {
+      const other = await prisma.channelMembership.findFirst({
+        where: { channelId, userId: { not: userId } },
+        select: { userId: true },
+      });
+      if (other) {
+        await notificationService.notify(other.userId, {
+          type: 'MESSAGE',
+          title: message.sender.displayName ?? 'New message',
+          body: message.body ?? 'Sent you a message',
+          data: { channelId, messageId: message.id },
+        });
+      }
+    }
     return message;
   },
 

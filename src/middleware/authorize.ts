@@ -52,3 +52,10 @@ export function authorize(scope: Scope, roles: string[], paramName?: string): Re
     }
   };
 }
+
+// Global super-admin gate for /admin endpoints. Use AFTER `authenticate`.
+export const requireSuperAdmin: RequestHandler = (req, _res, next) => {
+  if (!req.user) return next(Unauthorized());
+  if (req.user.role !== 'SUPER_ADMIN') return next(Forbidden('Super admin only'));
+  next();
+};

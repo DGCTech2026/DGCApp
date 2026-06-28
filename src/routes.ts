@@ -8,8 +8,8 @@ import { messagesRouter } from './modules/chat/chat.routes';
 import { clustersRouter } from './modules/clusters/clusters.routes';
 import { growthRouter } from './modules/growth/growth.routes';
 import { eventsRouter } from './modules/events/events.routes';
-// import { notificationsRouter } from './modules/notifications/notifications.routes';
-// import { adminRouter } from './modules/admin/admin.routes';
+import { notificationsRouter } from './modules/notifications/notifications.routes';
+import { adminRouter } from './modules/admin/admin.routes';
 
 export const router = Router();
 
@@ -22,6 +22,5 @@ router.use('/messages', messagesRouter);
 router.use('/clusters', clustersRouter);
 router.use('/growth', growthRouter);
 router.use('/events', eventsRouter);
-// Uncomment as each module is built:
-// router.use('/notifications', notificationsRouter);
-// router.use('/admin', adminRouter);
+router.use('/notifications', notificationsRouter);
+router.use('/admin', adminRouter);
