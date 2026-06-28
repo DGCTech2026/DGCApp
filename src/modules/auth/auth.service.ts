@@ -4,11 +4,14 @@ import { prisma } from '../../infra/db';
 import { emailQueue, smsQueue } from '../../infra/queue';
 import { env } from '../../config/env';
 import { isSmsConfigured } from '../../infra/sms';
+import { redis } from '../../infra/redis';
 import { growthEngine } from '../growth/growth.engine';
+import { onboardToBranch } from '../users/users.service';
+import type { RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
 import { hashValue, verifyHash } from '../../utils/hash';
-import { BadRequest, Unauthorized, Forbidden } from '../../utils/errors';
+import { BadRequest, Unauthorized, Forbidden, Conflict } from '../../utils/errors';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -81,7 +84,88 @@ async function createOtp(identifier: string, channel: 'EMAIL' | 'SMS'): Promise<
   return code;
 }
 
+// Validate + consume a one-time code (single-use, attempt cap). Throws on any failure.
+async function consumeOtp(identifier: string, code: string) {
+  const record = await prisma.otp.findUnique({ where: { identifier } });
+  if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+  if (record.attempts >= MAX_OTP_ATTEMPTS) {
+    await prisma.otp.delete({ where: { identifier } });
+    throw BadRequest('Too many attempts. Request a new code.');
+  }
+  const valid = await verifyOtpHash(record.hash, code);
+  if (!valid) {
+    await prisma.otp.update({ where: { identifier }, data: { attempts: { increment: 1 } } });
+    throw BadRequest('Invalid OTP');
+  }
+  await prisma.otp.delete({ where: { identifier } });
+}
+
 export const authService = {
+  // Single-submit registration: stash the Create Account form + email a code. The account is
+  // created (fully populated + branch-onboarded) only when the code is verified.
+  async register(input: RegisterInput) {
+    const email = norm(input.email);
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (existing) throw Conflict('An account with this email already exists. Sign in instead.');
+
+    const pending = {
+      passwordHash: await hashValue(input.password),
+      displayName: input.displayName,
+      phoneNumber: input.phoneNumber ?? null,
+      gender: input.gender ?? null,
+      dateOfBirth: input.dateOfBirth ? input.dateOfBirth.toISOString() : null,
+      occupation: input.occupation ?? null,
+      branchId: input.branchId ?? null,
+    };
+    await redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000));
+
+    const code = await createOtp(email, 'EMAIL');
+    await emailQueue.add('send-otp', { type: 'otp', to: email, code });
+    return { ok: true };
+  },
+
+  async registerVerify(email: string, code: string) {
+    const id = norm(email);
+    await consumeOtp(id, code);
+
+    const raw = await redis.get(`register:${id}`);
+    if (!raw) throw BadRequest('Registration session expired. Please start again.');
+    const pending = JSON.parse(raw) as {
+      passwordHash: string;
+      displayName: string;
+      phoneNumber: string | null;
+      gender: 'MALE' | 'FEMALE' | 'OTHER' | null;
+      dateOfBirth: string | null;
+      occupation: string | null;
+      branchId: string | null;
+    };
+    await redis.del(`register:${id}`);
+
+    const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
+    let user: TokenUser;
+    try {
+      user = await prisma.user.create({
+        data: {
+          email: id,
+          passwordHash: pending.passwordHash,
+          displayName: pending.displayName,
+          phoneNumber: pending.phoneNumber,
+          gender: pending.gender ?? undefined,
+          dateOfBirth: pending.dateOfBirth ? new Date(pending.dateOfBirth) : null,
+          occupation: pending.occupation,
+          ...(firstTimer ? { currentStageId: firstTimer.id } : {}),
+        },
+        select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
+      });
+    } catch {
+      throw Conflict('That email or phone number is already in use');
+    }
+
+    await growthEngine.enqueueRequirement(user.id, 'CREATE_ACCOUNT'); // AUTO (§11)
+    if (pending.branchId) await onboardToBranch(user.id, pending.branchId);
+    return { ...(await issueTokensFor(user)), isNewUser: true };
+  },
+
   async requestEmailOtp(email: string) {
     const id = norm(email);
     const code = await createOtp(id, 'EMAIL');

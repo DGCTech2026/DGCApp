@@ -16,6 +16,20 @@ export const verifyPhoneOtpSchema = z.object({ phone: e164, code: z.string().len
 export const googleAuthSchema = z.object({ idToken: z.string().min(1) });
 export const appleAuthSchema = z.object({ idToken: z.string().min(1) });
 
+// Registration (single submit of the Create Account form; then verify the emailed code)
+export const registerSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8).max(128),
+  displayName: z.string().min(1).max(100),
+  phoneNumber: e164.optional(),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
+  dateOfBirth: z.coerce.date().optional(),
+  occupation: z.string().max(120).optional(),
+  branchId: z.string().min(1).optional(),
+});
+export const registerVerifySchema = z.object({ email: z.string().email(), code: z.string().length(6) });
+export type RegisterInput = z.infer<typeof registerSchema>;
+
 // Password
 export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
 export const setPasswordSchema = z.object({ password: z.string().min(8).max(128) });

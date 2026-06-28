@@ -10,6 +10,8 @@ import {
   verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
+  registerSchema,
+  registerVerifySchema,
   loginSchema,
   setPasswordSchema,
   resetPasswordSchema,
@@ -63,6 +65,8 @@ const bearer = [{ bearerAuth: [] as string[] }];
 
 // ---- auth ----
 const publicAuth: [string, string, z.ZodTypeAny, z.ZodTypeAny][] = [
+  ['/api/v1/auth/register', 'Register: submit the Create Account form, emails a verification code', registerSchema, okSchema],
+  ['/api/v1/auth/register/verify', 'Verify the code → creates the account + onboards, returns tokens', registerVerifySchema, tokenSchema],
   ['/api/v1/auth/email/request-otp', 'Request an email OTP (public, rate-limited)', requestOtpSchema, okSchema],
   ['/api/v1/auth/email/verify-otp', 'Verify an email OTP and receive tokens', verifyOtpSchema, tokenSchema],
   ['/api/v1/auth/phone/request-otp', 'Request a phone OTP (public, rate-limited; needs SMS provider)', requestPhoneOtpSchema, okSchema],

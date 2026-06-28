@@ -10,6 +10,8 @@ import {
   verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
+  registerSchema,
+  registerVerifySchema,
   loginSchema,
   setPasswordSchema,
   resetPasswordSchema,
@@ -18,6 +20,10 @@ import {
 import { authController } from './auth.controller';
 
 export const authRouter = Router();
+
+// Registration (single submit of the Create Account form, then verify the emailed code)
+authRouter.post('/register', validate(registerSchema), otpRequestRateLimit, asyncHandler(authController.register));
+authRouter.post('/register/verify', validate(registerVerifySchema), asyncHandler(authController.registerVerify));
 
 // Email OTP (public)
 authRouter.post(

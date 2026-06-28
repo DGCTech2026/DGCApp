@@ -37,6 +37,14 @@ export const authController = {
     res.json(tokens);
   },
 
+  async register(req: Request, res: Response) {
+    res.json(await authService.register(req.body));
+  },
+
+  async registerVerify(req: Request, res: Response) {
+    res.json(await authService.registerVerify(req.body.email, req.body.code));
+  },
+
   async login(req: Request, res: Response) {
     res.json(await authService.login(req.body.email, req.body.password));
   },

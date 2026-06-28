@@ -19,7 +19,8 @@ const ME_SELECT = {
 } as const;
 
 // PRD §2: selecting a branch auto-joins the branch community + Global Announcement channel.
-async function onboardToBranch(userId: string, branchId: string) {
+// Exported so registration (auth.service) can reuse the exact same onboarding.
+export async function onboardToBranch(userId: string, branchId: string) {
   const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { id: true } });
   if (!branch) throw BadRequest('Branch not found');
 
