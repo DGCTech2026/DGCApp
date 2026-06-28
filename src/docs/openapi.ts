@@ -14,6 +14,8 @@ import {
 } from '../modules/auth/auth.schema';
 import { updateMeSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
+import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
+import { openDmSchema } from '../modules/channels/channels.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -161,6 +163,85 @@ registry.registerPath({
     },
     401: { description: 'Unauthorized', ...json(errorSchema) },
   },
+});
+
+// ---- channels + chat ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels',
+  tags: ['channels'],
+  summary: 'List my channels with last message + unread count (the Chats list)',
+  security: bearer,
+  responses: { 200: { description: 'Channels', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/channels/dm',
+  tags: ['channels'],
+  summary: 'Open (or fetch) a 1:1 DM channel',
+  security: bearer,
+  request: { body: json(openDmSchema) },
+  responses: { 201: { description: 'DM channel', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/channels/{channelId}/read',
+  tags: ['channels'],
+  summary: 'Mark a channel read (sets lastReadAt)',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/messages',
+  tags: ['chat'],
+  summary: 'List messages (keyset pagination: ?cursor=&limit=)',
+  security: bearer,
+  request: {
+    params: z.object({ channelId: z.string() }),
+    query: z.object({ cursor: z.string().optional(), limit: z.coerce.number().optional() }),
+  },
+  responses: { 200: { description: 'Messages + nextCursor', ...json(z.object({ messages: z.array(z.object({}).passthrough()), nextCursor: z.string().nullable() })) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/channels/{channelId}/messages',
+  tags: ['chat'],
+  summary: 'Send a message (read-only channels require moderator)',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }), body: json(sendMessageSchema) },
+  responses: {
+    201: { description: 'Created message', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not a member / read-only', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/reactions',
+  tags: ['chat'],
+  summary: 'React to a message',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(reactionSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/pin',
+  tags: ['chat'],
+  summary: 'Pin a message (moderator only)',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }) },
+  responses: { 200: { description: 'Pinned message', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/messages/{messageId}',
+  tags: ['chat'],
+  summary: 'Delete a message (sender or moderator)',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
 export function mountDocs(app: Express) {
