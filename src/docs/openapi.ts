@@ -21,6 +21,7 @@ import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
+import { submitCertificateSchema, adminVerifyRequirementSchema } from '../modules/growth/growth.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -294,9 +295,61 @@ registry.registerPath({
   method: 'get',
   path: '/api/v1/growth/me',
   tags: ['growth'],
-  summary: 'My Journey summary: current stage, progress %, next action, stage checklist',
+  summary: 'My Journey: current stage, progress %, next action, stage checklist, badges',
   security: bearer,
   responses: { 200: { description: 'Growth summary', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/growth/requirements/{key}/complete',
+  tags: ['growth'],
+  summary: 'Self-attest a SELF_ATTEST requirement (advances stage when all are met)',
+  security: bearer,
+  request: { params: z.object({ key: z.string() }) },
+  responses: { 200: { description: 'Updated growth summary', ...json(z.object({}).passthrough()) }, 400: { description: 'Not self-attestable', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/growth/certificates',
+  tags: ['growth'],
+  summary: 'Submit a certificate for a CERTIFICATE requirement (status PENDING)',
+  security: bearer,
+  request: { body: json(submitCertificateSchema) },
+  responses: { 201: { description: 'Certificate', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/growth/certificates',
+  tags: ['growth'],
+  summary: 'My submitted certificates',
+  security: bearer,
+  responses: { 200: { description: 'Certificates', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/growth/admin/certificates',
+  tags: ['growth'],
+  summary: 'Pending certificate verification queue (super admin)',
+  security: bearer,
+  responses: { 200: { description: 'Pending certificates', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/growth/admin/certificates/{id}/verify',
+  tags: ['growth'],
+  summary: 'Verify a certificate (records the requirement completion)',
+  security: bearer,
+  request: { params: z.object({ id: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/growth/admin/requirements/verify',
+  tags: ['growth'],
+  summary: 'Admin-verify an ADMIN_VERIFY requirement for a member',
+  security: bearer,
+  request: { body: json(adminVerifyRequirementSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
 // ---- events ----

@@ -1,6 +1,7 @@
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Conflict } from '../../utils/errors';
 import { hashValue } from '../../utils/hash';
+import { growthEngine } from '../growth/growth.engine';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -47,6 +48,7 @@ async function onboardToBranch(userId: string, branchId: string) {
     },
     { timeout: 20000, maxWait: 10000 },
   );
+  await growthEngine.enqueueRequirement(userId, 'JOIN_BRANCH'); // AUTO (First Timer, §11)
 }
 
 export const userService = {

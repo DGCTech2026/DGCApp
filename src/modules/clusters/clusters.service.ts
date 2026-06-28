@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { NotFound } from '../../utils/errors';
+import { growthEngine } from '../growth/growth.engine';
 
 export const clusterService = {
   // Recommended Clusters list — all active clusters, flagged with whether the user has joined.
@@ -61,7 +62,7 @@ export const clusterService = {
       },
       { timeout: 15000, maxWait: 8000 },
     );
-    // TODO(growth): JOIN_CLUSTER is an AUTO requirement (Stage 2) — enqueue a growth recompute (§6.2).
+    await growthEngine.enqueueRequirement(userId, 'JOIN_CLUSTER'); // AUTO (New Member, §11)
     return { ok: true };
   },
 

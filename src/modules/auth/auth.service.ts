@@ -4,6 +4,7 @@ import { prisma } from '../../infra/db';
 import { emailQueue, smsQueue } from '../../infra/queue';
 import { env } from '../../config/env';
 import { isSmsConfigured } from '../../infra/sms';
+import { growthEngine } from '../growth/growth.engine';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
 import { hashValue, verifyHash } from '../../utils/hash';
@@ -56,6 +57,7 @@ async function ensureUser(
       data: { ...create, ...(firstTimer ? { currentStageId: firstTimer.id } : {}) },
       select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
     });
+    await growthEngine.enqueueRequirement(user.id, 'CREATE_ACCOUNT'); // AUTO (First Timer, §11)
     return { user, isNew: true };
   } catch {
     // Race: created between our check and create — fetch and treat as existing.
