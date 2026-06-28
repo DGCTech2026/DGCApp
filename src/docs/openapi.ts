@@ -23,7 +23,11 @@ registry.registerComponent('securitySchemes', 'bearerAuth', {
 });
 
 const okSchema = z.object({ ok: z.boolean() });
-const tokenSchema = z.object({ accessToken: z.string(), refreshToken: z.string() });
+const tokenSchema = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  isNewUser: z.boolean().optional(), // true when this sign-in created the account → route to onboarding
+});
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const branchSchema = z.object({
   id: z.string(),
@@ -42,6 +46,7 @@ const meSchema = z.object({
   dateOfBirth: z.string().nullable(),
   occupation: z.string().nullable(),
   bio: z.string().nullable(),
+  onboardingComplete: z.boolean(),
 });
 
 const json = (schema: z.ZodTypeAny) => ({ content: { 'application/json': { schema } } });

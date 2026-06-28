@@ -64,7 +64,11 @@ export const userService = {
       },
     });
     if (!user) throw NotFound('User not found');
-    return user;
+    // The client uses this to decide whether to route into the Create Account onboarding screens.
+    return {
+      ...user,
+      onboardingComplete: Boolean(user.displayName && user.branchMemberships.length > 0),
+    };
   },
 
   async updateMe(userId: string, data: UpdateMeInput) {

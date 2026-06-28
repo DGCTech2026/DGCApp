@@ -29,17 +29,32 @@ async function issueTokensFor(user: TokenUser) {
 }
 
 // Every account starts at the First Timer growth stage (PRD §11 Stage 1).
+// Returns `isNew` so the auth response can tell the client whether to route into onboarding.
 async function ensureUser(
   where: { email: string } | { phoneNumber: string },
-  create: { email?: string; phoneNumber?: string },
-): Promise<TokenUser> {
-  const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
-  return prisma.user.upsert({
+  create: { email?: string; phoneNumber?: string; displayName?: string | null; avatarUrl?: string | null },
+): Promise<{ user: TokenUser; isNew: boolean }> {
+  const existing = await prisma.user.findUnique({
     where,
-    create: { ...create, ...(firstTimer ? { currentStageId: firstTimer.id } : {}) },
-    update: {},
     select: { id: true, email: true, globalRole: true },
   });
+  if (existing) return { user: existing, isNew: false };
+
+  const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
+  try {
+    const user = await prisma.user.create({
+      data: { ...create, ...(firstTimer ? { currentStageId: firstTimer.id } : {}) },
+      select: { id: true, email: true, globalRole: true },
+    });
+    return { user, isNew: true };
+  } catch {
+    // Race: created between our check and create — fetch and treat as existing.
+    const user = await prisma.user.findUniqueOrThrow({
+      where,
+      select: { id: true, email: true, globalRole: true },
+    });
+    return { user, isNew: false };
+  }
 }
 
 async function createOtp(identifier: string, channel: 'EMAIL' | 'SMS'): Promise<string> {
@@ -87,12 +102,12 @@ export const authService = {
 
     await prisma.otp.delete({ where: { identifier: id } }); // single-use
 
-    const user =
+    const { user, isNew } =
       record.channel === 'EMAIL'
         ? await ensureUser({ email: id }, { email: id })
         : await ensureUser({ phoneNumber: id }, { phoneNumber: id });
 
-    return issueTokensFor(user);
+    return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
   async googleAuth(idToken: string) {
@@ -105,8 +120,13 @@ export const authService = {
       throw Unauthorized('Invalid Google token');
     }
     if (!payload?.email || !payload.email_verified) throw Unauthorized('Google account email not verified');
-    const user = await ensureUser({ email: norm(payload.email) }, { email: norm(payload.email) });
-    return issueTokensFor(user);
+    const email = norm(payload.email);
+    // Google gives us name + picture — pre-fill them on first signup (don't clobber an existing profile).
+    const { user, isNew } = await ensureUser(
+      { email },
+      { email, displayName: payload.name ?? null, avatarUrl: payload.picture ?? null },
+    );
+    return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
   async appleAuth(idToken: string) {
@@ -118,9 +138,11 @@ export const authService = {
       throw Unauthorized('Invalid Apple token');
     }
     // Apple only returns email on first authorization; require it to provision the account.
+    // (Apple sends the display name only in the initial client authorization payload, not the ID token.)
     if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
-    const user = await ensureUser({ email: norm(claims.email) }, { email: norm(claims.email) });
-    return issueTokensFor(user);
+    const email = norm(claims.email);
+    const { user, isNew } = await ensureUser({ email }, { email });
+    return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
   async refreshTokens(rawToken: string) {
