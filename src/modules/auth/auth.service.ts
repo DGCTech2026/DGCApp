@@ -283,8 +283,16 @@ export const authService = {
     return issueTokensFor(user); // also enforces suspended/deleted
   },
 
-  // Set or change the password for the authenticated user (used during registration too).
-  async setPassword(userId: string, password: string) {
+  // Set or change the authenticated user's password. Changing an existing password requires the
+  // current one; first-time set (OTP/Google accounts with no password) does not.
+  async setPassword(userId: string, password: string, currentPassword?: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+    if (!user) throw Unauthorized();
+    if (user.passwordHash) {
+      if (!currentPassword) throw BadRequest('Current password is required to change your password');
+      const ok = await verifyHash(user.passwordHash, currentPassword).catch(() => false);
+      if (!ok) throw BadRequest('Current password is incorrect');
+    }
     await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashValue(password) } });
     return { ok: true };
   },

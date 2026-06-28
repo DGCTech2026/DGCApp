@@ -50,7 +50,7 @@ export const authController = {
   },
 
   async setPassword(req: Request, res: Response) {
-    res.json(await authService.setPassword(req.user!.sub, req.body.password));
+    res.json(await authService.setPassword(req.user!.sub, req.body.password, req.body.currentPassword));
   },
 
   async resetPassword(req: Request, res: Response) {

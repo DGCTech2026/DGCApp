@@ -32,7 +32,10 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 
 // Password
 export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
-export const setPasswordSchema = z.object({ password: z.string().min(8).max(128) });
+export const setPasswordSchema = z.object({
+  password: z.string().min(8).max(128),
+  currentPassword: z.string().optional(), // required only when changing an existing password
+});
 export const resetPasswordSchema = z.object({
   email: z.string().email(),
   code: z.string().length(6),
