@@ -45,12 +45,22 @@ export const authController = {
     res.json(await authService.registerVerify(req.body.email, req.body.code));
   },
 
+  // Unified verify — body { identifier, code }; identifier is an email or E.164 phone.
+  async verify(req: Request, res: Response) {
+    res.json(await authService.verifyOtp(req.body.identifier, req.body.code));
+  },
+
   async login(req: Request, res: Response) {
     res.json(await authService.login(req.body.email, req.body.password));
   },
 
   async setPassword(req: Request, res: Response) {
     res.json(await authService.setPassword(req.user!.sub, req.body.password, req.body.currentPassword));
+  },
+
+  async requestPasswordResetOtp(req: Request, res: Response) {
+    await authService.requestPasswordResetOtp(req.body.email);
+    res.json({ ok: true });
   },
 
   async resetPassword(req: Request, res: Response) {

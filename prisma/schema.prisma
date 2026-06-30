@@ -36,6 +36,13 @@ enum OtpChannel {
   SMS
 }
 
+// What an OTP may be used for. Codes are purpose-bound so a login/registration code
+// cannot be replayed to reset a password (and vice versa).
+enum OtpPurpose {
+  AUTH // register or passwordless sign-in (consumed by /auth/verify-otp)
+  RESET // password reset (consumed by /auth/reset-password)
+}
+
 enum BranchRole {
   MEMBER
   ADMIN
@@ -199,6 +206,7 @@ model User {
 model Otp {
   identifier String     @id // email or phone, normalised (trim + lowercase)
   channel    OtpChannel @default(EMAIL)
+  purpose    OtpPurpose @default(AUTH)
   hash       String
   expiresAt  DateTime
   attempts   Int        @default(0)

@@ -28,6 +28,11 @@ export const registerSchema = z.object({
   branchId: z.string().min(1).optional(),
 });
 export const registerVerifySchema = z.object({ email: z.string().email(), code: z.string().length(6) });
+// Unified verify (email or phone) — identifier must match the one the code was sent to.
+export const verifyOtpUnifiedSchema = z.object({
+  identifier: z.string().min(3),
+  code: z.string().length(6),
+});
 export type RegisterInput = z.infer<typeof registerSchema>;
 
 // Password

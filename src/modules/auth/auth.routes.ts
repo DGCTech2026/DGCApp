@@ -12,6 +12,7 @@ import {
   appleAuthSchema,
   registerSchema,
   registerVerifySchema,
+  verifyOtpUnifiedSchema,
   loginSchema,
   setPasswordSchema,
   resetPasswordSchema,
@@ -24,6 +25,10 @@ export const authRouter = Router();
 // Registration (single submit of the Create Account form, then verify the emailed code)
 authRouter.post('/register', validate(registerSchema), otpRequestRateLimit, asyncHandler(authController.register));
 authRouter.post('/register/verify', validate(registerVerifySchema), asyncHandler(authController.registerVerify));
+
+// Unified OTP verify (email or phone): completes a pending registration, else passwordless sign-in.
+// Preferred over the per-channel verify aliases below.
+authRouter.post('/verify-otp', validate(verifyOtpUnifiedSchema), asyncHandler(authController.verify));
 
 // Email OTP (public)
 authRouter.post(
@@ -49,6 +54,12 @@ authRouter.post('/apple', validate(appleAuthSchema), asyncHandler(authController
 
 // Password (public login + reset; set/change requires auth)
 authRouter.post('/login', validate(loginSchema), loginRateLimit, asyncHandler(authController.login));
+authRouter.post(
+  '/password/request-otp',
+  validate(requestOtpSchema),
+  otpRequestRateLimit,
+  asyncHandler(authController.requestPasswordResetOtp),
+);
 authRouter.post(
   '/reset-password',
   validate(resetPasswordSchema),

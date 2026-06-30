@@ -73,22 +73,30 @@ async function ensureUser(
   }
 }
 
-async function createOtp(identifier: string, channel: 'EMAIL' | 'SMS'): Promise<string> {
+async function createOtp(
+  identifier: string,
+  channel: 'EMAIL' | 'SMS',
+  purpose: 'AUTH' | 'RESET',
+): Promise<string> {
   const code = generateOtp();
   const hash = await hashOtp(code);
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
   await prisma.otp.upsert({
     where: { identifier },
-    create: { identifier, channel, hash, expiresAt, attempts: 0 },
-    update: { channel, hash, expiresAt, attempts: 0 }, // new code resets attempt counter
+    create: { identifier, channel, purpose, hash, expiresAt, attempts: 0 },
+    update: { channel, purpose, hash, expiresAt, attempts: 0 }, // new code resets attempt counter
   });
   return code;
 }
 
-// Validate + consume a one-time code (single-use, attempt cap). Throws on any failure.
-async function consumeOtp(identifier: string, code: string) {
+// Validate + consume a one-time code (single-use, attempt cap, purpose-bound). Returns the consumed
+// record so the caller can read its channel. Throws on any failure.
+async function consumeOtp(identifier: string, code: string, purpose: 'AUTH' | 'RESET') {
   const record = await prisma.otp.findUnique({ where: { identifier } });
   if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+  if (record.purpose !== purpose) {
+    throw BadRequest('This code was not issued for this action. Please request a new one.');
+  }
   if (record.attempts >= MAX_OTP_ATTEMPTS) {
     await prisma.otp.delete({ where: { identifier } });
     throw BadRequest('Too many attempts. Request a new code.');
@@ -99,6 +107,7 @@ async function consumeOtp(identifier: string, code: string) {
     throw BadRequest('Invalid OTP');
   }
   await prisma.otp.delete({ where: { identifier } });
+  return record;
 }
 
 export const authService = {
@@ -123,51 +132,14 @@ export const authService = {
     };
     await redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000));
 
-    const code = await createOtp(email, 'EMAIL');
+    const code = await createOtp(email, 'EMAIL', 'AUTH');
     await emailQueue.add('send-otp', { type: 'otp', to: email, code });
     return { ok: true };
   },
 
+  // Back-compat alias — /auth/register/verify now funnels into the unified verifyOtp below.
   async registerVerify(email: string, code: string) {
-    const id = norm(email);
-    await consumeOtp(id, code);
-
-    const raw = await redis.get(`register:${id}`);
-    if (!raw) throw BadRequest('Registration session expired. Please start again.');
-    const pending = JSON.parse(raw) as {
-      passwordHash: string;
-      displayName: string;
-      phoneNumber: string | null;
-      gender: 'MALE' | 'FEMALE' | 'OTHER' | null;
-      dateOfBirth: string | null;
-      occupation: string | null;
-      branchId: string | null;
-    };
-    await redis.del(`register:${id}`);
-
-    const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
-    let user: TokenUser;
-    try {
-      user = await prisma.user.create({
-        data: {
-          email: id,
-          passwordHash: pending.passwordHash,
-          displayName: pending.displayName,
-          phoneNumber: pending.phoneNumber,
-          gender: pending.gender ?? undefined,
-          dateOfBirth: pending.dateOfBirth ? new Date(pending.dateOfBirth) : null,
-          occupation: pending.occupation,
-          ...(firstTimer ? { currentStageId: firstTimer.id } : {}),
-        },
-        select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
-      });
-    } catch {
-      throw Conflict('That email or phone number is already in use');
-    }
-
-    await growthEngine.enqueueRequirement(user.id, 'CREATE_ACCOUNT'); // AUTO (§11)
-    if (pending.branchId) await onboardToBranch(user.id, pending.branchId);
-    return { ...(await issueTokensFor(user)), isNewUser: true };
+    return this.verifyOtp(email, code);
   },
 
   async requestEmailOtp(email: string) {
@@ -175,41 +147,65 @@ export const authService = {
     if (isDisposableEmail(id)) {
       throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
     }
-    const code = await createOtp(id, 'EMAIL');
+    const code = await createOtp(id, 'EMAIL', 'AUTH');
     await emailQueue.add('send-otp', { type: 'otp', to: id, code });
   },
 
   async requestPhoneOtp(phone: string) {
     if (!isSmsConfigured()) throw BadRequest('Phone sign-in is not configured');
     const id = norm(phone);
-    const code = await createOtp(id, 'SMS');
+    const code = await createOtp(id, 'SMS', 'AUTH');
     await smsQueue.add('send-otp', { to: id, code });
   },
 
-  // Shared by email + phone verify — the stored OTP's channel decides which identity to upsert.
+  // Unified OTP verification (email or phone). If a registration is pending for this identifier,
+  // finish the full, branch-onboarded account from the stashed form; otherwise passwordless
+  // sign-in (create-or-login). The same emailed/texted code works either way, so the client can't
+  // pick the "wrong" verify endpoint. The OTP's channel decides which identity to use on sign-in.
   async verifyOtp(identifier: string, code: string) {
     const id = norm(identifier);
-    const record = await prisma.otp.findUnique({ where: { identifier: id } });
-    if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+    const record = await consumeOtp(id, code, 'AUTH');
 
-    if (record.attempts >= MAX_OTP_ATTEMPTS) {
-      await prisma.otp.delete({ where: { identifier: id } });
-      throw BadRequest('Too many attempts. Request a new code.');
+    const raw = await redis.get(`register:${id}`);
+    if (raw) {
+      await redis.del(`register:${id}`);
+      const pending = JSON.parse(raw) as {
+        passwordHash: string;
+        displayName: string;
+        phoneNumber: string | null;
+        gender: 'MALE' | 'FEMALE' | 'OTHER' | null;
+        dateOfBirth: string | null;
+        occupation: string | null;
+        branchId: string | null;
+      };
+      const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
+      let user: TokenUser;
+      try {
+        user = await prisma.user.create({
+          data: {
+            email: id,
+            passwordHash: pending.passwordHash,
+            displayName: pending.displayName,
+            phoneNumber: pending.phoneNumber,
+            gender: pending.gender ?? undefined,
+            dateOfBirth: pending.dateOfBirth ? new Date(pending.dateOfBirth) : null,
+            occupation: pending.occupation,
+            ...(firstTimer ? { currentStageId: firstTimer.id } : {}),
+          },
+          select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
+        });
+      } catch {
+        throw Conflict('That email or phone number is already in use');
+      }
+      await growthEngine.enqueueRequirement(user.id, 'CREATE_ACCOUNT'); // AUTO (§11)
+      if (pending.branchId) await onboardToBranch(user.id, pending.branchId);
+      return { ...(await issueTokensFor(user)), isNewUser: true };
     }
-
-    const valid = await verifyOtpHash(record.hash, code);
-    if (!valid) {
-      await prisma.otp.update({ where: { identifier: id }, data: { attempts: { increment: 1 } } });
-      throw BadRequest('Invalid OTP');
-    }
-
-    await prisma.otp.delete({ where: { identifier: id } }); // single-use
 
     const { user, isNew } =
       record.channel === 'EMAIL'
         ? await ensureUser({ email: id }, { email: id })
         : await ensureUser({ phoneNumber: id }, { phoneNumber: id });
-
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
@@ -304,21 +300,21 @@ export const authService = {
     return { ok: true };
   },
 
-  // Forgot-password: client first calls /auth/email/request-otp, then this with the code + new password.
+  // Forgot-password step 1: email a RESET-purpose code. Always returns ok to the client, but only
+  // actually sends when the account exists — so it can't be used to enumerate registered emails.
+  async requestPasswordResetOtp(email: string) {
+    const id = norm(email);
+    const user = await prisma.user.findUnique({ where: { email: id }, select: { id: true } });
+    if (!user) return;
+    const code = await createOtp(id, 'EMAIL', 'RESET');
+    await emailQueue.add('send-otp', { type: 'otp', to: id, code });
+  },
+
+  // Forgot-password step 2: RESET-purpose code + new password. A login/registration code is
+  // rejected here (wrong purpose), so it can't be replayed to take over an account.
   async resetPassword(email: string, code: string, newPassword: string) {
     const id = norm(email);
-    const record = await prisma.otp.findUnique({ where: { identifier: id } });
-    if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
-    if (record.attempts >= MAX_OTP_ATTEMPTS) {
-      await prisma.otp.delete({ where: { identifier: id } });
-      throw BadRequest('Too many attempts. Request a new code.');
-    }
-    const valid = await verifyOtpHash(record.hash, code);
-    if (!valid) {
-      await prisma.otp.update({ where: { identifier: id }, data: { attempts: { increment: 1 } } });
-      throw BadRequest('Invalid OTP');
-    }
-    await prisma.otp.delete({ where: { identifier: id } });
+    await consumeOtp(id, code, 'RESET');
 
     const user = await prisma.user.findUnique({
       where: { email: id },
