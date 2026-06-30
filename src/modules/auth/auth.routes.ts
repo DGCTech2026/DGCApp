@@ -5,13 +5,10 @@ import { otpRequestRateLimit, loginRateLimit, passwordResetRateLimit } from '../
 import { asyncHandler } from '../../utils/asyncHandler';
 import {
   requestOtpSchema,
-  verifyOtpSchema,
   requestPhoneOtpSchema,
-  verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
   registerSchema,
-  registerVerifySchema,
   verifyOtpUnifiedSchema,
   loginSchema,
   setPasswordSchema,
@@ -22,12 +19,10 @@ import { authController } from './auth.controller';
 
 export const authRouter = Router();
 
-// Registration (single submit of the Create Account form, then verify the emailed code)
+// Registration: submit the Create Account form, then verify the emailed code via /verify-otp.
 authRouter.post('/register', validate(registerSchema), otpRequestRateLimit, asyncHandler(authController.register));
-authRouter.post('/register/verify', validate(registerVerifySchema), asyncHandler(authController.registerVerify));
 
-// Unified OTP verify (email or phone): completes a pending registration, else passwordless sign-in.
-// Preferred over the per-channel verify aliases below.
+// THE verify endpoint (email or phone): completes a pending registration, else passwordless sign-in.
 authRouter.post('/verify-otp', validate(verifyOtpUnifiedSchema), asyncHandler(authController.verify));
 
 // Email OTP (public)
@@ -37,7 +32,6 @@ authRouter.post(
   otpRequestRateLimit,
   asyncHandler(authController.requestOtp),
 );
-authRouter.post('/email/verify-otp', validate(verifyOtpSchema), asyncHandler(authController.verifyOtp));
 
 // Phone OTP (public) — gated on SMS provider config
 authRouter.post(
@@ -46,7 +40,6 @@ authRouter.post(
   otpRequestRateLimit,
   asyncHandler(authController.requestPhoneOtp),
 );
-authRouter.post('/phone/verify-otp', validate(verifyPhoneOtpSchema), asyncHandler(authController.verifyPhoneOtp));
 
 // OAuth (public)
 authRouter.post('/google', validate(googleAuthSchema), asyncHandler(authController.google));

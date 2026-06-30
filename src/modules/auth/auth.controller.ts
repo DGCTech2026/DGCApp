@@ -7,19 +7,9 @@ export const authController = {
     res.json({ ok: true });
   },
 
-  async verifyOtp(req: Request, res: Response) {
-    const tokens = await authService.verifyOtp(req.body.email, req.body.code);
-    res.json(tokens);
-  },
-
   async requestPhoneOtp(req: Request, res: Response) {
     await authService.requestPhoneOtp(req.body.phone);
     res.json({ ok: true });
-  },
-
-  async verifyPhoneOtp(req: Request, res: Response) {
-    const tokens = await authService.verifyOtp(req.body.phone, req.body.code);
-    res.json(tokens);
   },
 
   async google(req: Request, res: Response) {
@@ -41,11 +31,7 @@ export const authController = {
     res.json(await authService.register(req.body));
   },
 
-  async registerVerify(req: Request, res: Response) {
-    res.json(await authService.registerVerify(req.body.email, req.body.code));
-  },
-
-  // Unified verify — body { identifier, code }; identifier is an email or E.164 phone.
+  // Verify an OTP — body { identifier, code }; identifier is an email or E.164 phone.
   async verify(req: Request, res: Response) {
     res.json(await authService.verifyOtp(req.body.identifier, req.body.code));
   },

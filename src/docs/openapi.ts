@@ -5,13 +5,10 @@ import type { Express } from 'express';
 import { logger } from '../infra/logger';
 import {
   requestOtpSchema,
-  verifyOtpSchema,
   requestPhoneOtpSchema,
-  verifyPhoneOtpSchema,
   googleAuthSchema,
   appleAuthSchema,
   registerSchema,
-  registerVerifySchema,
   verifyOtpUnifiedSchema,
   loginSchema,
   setPasswordSchema,
@@ -76,10 +73,6 @@ const publicAuth: [string, string, z.ZodTypeAny, z.ZodTypeAny][] = [
   ['/api/v1/auth/password/request-otp', 'Forgot password: email a reset code (public, rate-limited)', requestOtpSchema, okSchema],
   ['/api/v1/auth/reset-password', 'Reset password with a code from /auth/password/request-otp', resetPasswordSchema, tokenSchema],
   ['/api/v1/auth/refresh', 'Rotate refresh token for a new token pair', refreshTokenSchema, tokenSchema],
-  // Deprecated per-channel verify aliases — all funnel into /auth/verify-otp. Kept for back-compat.
-  ['/api/v1/auth/register/verify', '[alias of /auth/verify-otp] Finish a pending registration', registerVerifySchema, tokenSchema],
-  ['/api/v1/auth/email/verify-otp', '[alias of /auth/verify-otp] Verify an email OTP', verifyOtpSchema, tokenSchema],
-  ['/api/v1/auth/phone/verify-otp', '[alias of /auth/verify-otp] Verify a phone OTP', verifyPhoneOtpSchema, tokenSchema],
 ];
 for (const [path, summary, body, ok] of publicAuth) {
   registry.registerPath({
@@ -532,7 +525,7 @@ const apiDescription = [
   '| Google | `POST /auth/google` | the same call |',
   '| Apple / Phone | disabled | disabled |',
   '',
-  'There is **one verify endpoint, `POST /auth/verify-otp`** (email or phone): it finishes a pending registration if one exists, otherwise does a passwordless sign-in. (`/auth/register/verify`, `/auth/email/verify-otp`, `/auth/phone/verify-otp` still work as aliases.) For the passwordless methods (Google, email OTP) there is **no separate login endpoint** — the backend creates the account when the user is new, or signs them in when they already exist. After the call, route using `onboardingComplete` (see Onboarding). Only email + password has separate sign-up and sign-in endpoints.',
+  'There is **one verify endpoint, `POST /auth/verify-otp`** (email or phone): it finishes a pending registration if one exists, otherwise does a passwordless sign-in. For the passwordless methods (Google, email OTP) there is **no separate login endpoint** — the backend creates the account when the user is new, or signs them in when they already exist. After the call, route using `onboardingComplete` (see Onboarding). Only email + password has separate sign-up and sign-in endpoints.',
   '',
   '> **Apple** and **Phone OTP** are not active yet (no Apple client id / SMS provider) and return a "not configured" error. Do not ship them.',
   '',

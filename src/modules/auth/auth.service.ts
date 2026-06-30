@@ -137,11 +137,6 @@ export const authService = {
     return { ok: true };
   },
 
-  // Back-compat alias — /auth/register/verify now funnels into the unified verifyOtp below.
-  async registerVerify(email: string, code: string) {
-    return this.verifyOtp(email, code);
-  },
-
   async requestEmailOtp(email: string) {
     const id = norm(email);
     if (isDisposableEmail(id)) {
