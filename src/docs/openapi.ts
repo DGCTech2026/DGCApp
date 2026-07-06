@@ -22,6 +22,7 @@ import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
 import { submitCertificateSchema, adminVerifyRequirementSchema } from '../modules/growth/growth.schema';
+import { postAnnouncementSchema, announcementAdminSchema } from '../modules/announcements/announcements.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -480,6 +481,54 @@ registry.registerPath({
   summary: 'Assign a branch admin',
   security: bearer,
   request: { params: z.object({ branchId: z.string() }), body: json(assignUserSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+
+// ---- announcements (PRD §4) ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/announcements',
+  tags: ['announcements'],
+  summary: 'List recent announcements (Home → Announcements)',
+  security: bearer,
+  responses: { 200: { description: 'Announcements', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/announcements',
+  tags: ['announcements'],
+  summary: 'Post an announcement (super admin or announcement admin) — notifies all members',
+  security: bearer,
+  request: { body: json(postAnnouncementSchema) },
+  responses: {
+    201: { description: 'Created announcement', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not authorized to post', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/announcements/admins',
+  tags: ['announcements'],
+  summary: 'List announcement admins (super admin only)',
+  security: bearer,
+  responses: { 200: { description: 'Announcement admins', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/announcements/admins',
+  tags: ['announcements'],
+  summary: 'Authorize a user to post announcements (super admin only)',
+  security: bearer,
+  request: { body: json(announcementAdminSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/announcements/admins/{userId}',
+  tags: ['announcements'],
+  summary: 'Revoke a user announcement-posting access (super admin only)',
+  security: bearer,
+  request: { params: z.object({ userId: z.string() }) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 

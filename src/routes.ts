@@ -10,6 +10,7 @@ import { growthRouter } from './modules/growth/growth.routes';
 import { eventsRouter } from './modules/events/events.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { adminRouter } from './modules/admin/admin.routes';
+import { announcementsRouter } from './modules/announcements/announcements.routes';
 
 export const router = Router();
 
@@ -24,3 +25,4 @@ router.use('/growth', growthRouter);
 router.use('/events', eventsRouter);
 router.use('/notifications', notificationsRouter);
 router.use('/admin', adminRouter);
+router.use('/announcements', announcementsRouter);

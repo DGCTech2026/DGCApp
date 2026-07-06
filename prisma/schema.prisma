@@ -134,6 +134,7 @@ enum NotificationType {
   MENTION
   GROWTH
   EVENT
+  ANNOUNCEMENT
   REPORT
   SYSTEM
 }
@@ -328,6 +329,7 @@ model Message {
   channelId String
   senderId  String
   type      MessageType @default(TEXT)
+  title     String? // set for announcements (title + body); null for normal chat messages
   body      String?
   mediaUrl  String? // Cloudinary URL; metadata in Media if catalogued
 

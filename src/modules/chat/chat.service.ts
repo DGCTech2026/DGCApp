@@ -10,6 +10,7 @@ const MESSAGE_SELECT = {
   channelId: true,
   senderId: true,
   type: true,
+  title: true,
   body: true,
   mediaUrl: true,
   replyToId: true,
