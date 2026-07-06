@@ -24,7 +24,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: JWT_ACCESS_TTL
-        value: 15m
+        value: 7d # NOTE: long-lived access token — a suspended/banned user keeps access until it expires. Tighten (15m + frontend refresh) before launch.
       - key: JWT_REFRESH_TTL
         value: 30d
       - key: BREVO_SENDER_EMAIL
