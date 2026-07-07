@@ -254,6 +254,15 @@ registry.registerPath({
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/messages/{messageId}/reactions',
+  tags: ['chat'],
+  summary: 'Remove your reaction (emoji) from a message',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(reactionSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
   method: 'post',
   path: '/api/v1/messages/{messageId}/pin',
   tags: ['chat'],
@@ -261,6 +270,15 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ messageId: z.string() }) },
   responses: { 200: { description: 'Pinned message', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/unpin',
+  tags: ['chat'],
+  summary: 'Unpin a message (moderator only)',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }) },
+  responses: { 200: { description: 'Unpinned message', ...json(z.object({}).passthrough()) } },
 });
 registry.registerPath({
   method: 'delete',
