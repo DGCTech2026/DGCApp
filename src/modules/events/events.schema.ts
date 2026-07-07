@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+// Optional id that treats "" (common from forms/Swagger) as "not provided". Without this an empty
+// string slips past the branch-vs-cluster guard, then hits the foreign key and causes a 500.
+const optionalId = z
+  .string()
+  .optional()
+  .transform((v) => (v === '' ? undefined : v));
+
 export const createEventSchema = z
   .object({
     title: z.string().min(1).max(200),
@@ -7,8 +14,8 @@ export const createEventSchema = z
     location: z.string().max(300).optional(),
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date().optional(),
-    branchId: z.string().optional(), // branch event
-    clusterId: z.string().optional(), // cluster event; neither = global
+    branchId: optionalId, // branch event
+    clusterId: optionalId, // cluster event; neither = global
   })
   .strict();
 
