@@ -19,7 +19,7 @@ import { updateMeSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
 import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
-import { createEventSchema, rsvpSchema } from '../modules/events/events.schema';
+import { createEventSchema, updateEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
 import { submitCertificateSchema, adminVerifyRequirementSchema } from '../modules/growth/growth.schema';
 import { postAnnouncementSchema, announcementAdminSchema } from '../modules/announcements/announcements.schema';
@@ -425,6 +425,30 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ eventId: z.string() }) },
   responses: { 200: { description: 'Event', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'patch',
+  path: '/api/v1/events/{eventId}',
+  tags: ['events'],
+  summary: 'Edit an event (super admin or the branch admin / cluster moderator who owns it); scope is fixed',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }), body: json(updateEventSchema) },
+  responses: {
+    200: { description: 'Updated event', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not permitted', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/events/{eventId}',
+  tags: ['events'],
+  summary: 'Delete/cancel an event (removes its RSVPs) — super admin or the owning admin/moderator',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }) },
+  responses: {
+    200: { description: 'OK', ...json(okSchema) },
+    403: { description: 'Not permitted', ...json(errorSchema) },
+  },
 });
 registry.registerPath({
   method: 'post',

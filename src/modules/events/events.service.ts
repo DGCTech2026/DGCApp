@@ -1,6 +1,6 @@
 import { prisma } from '../../infra/db';
 import { NotFound, Forbidden, BadRequest } from '../../utils/errors';
-import type { CreateEventInput } from './events.schema';
+import type { CreateEventInput, UpdateEventInput } from './events.schema';
 
 const EVENT_SELECT = {
   id: true,
@@ -18,20 +18,21 @@ const EVENT_SELECT = {
   _count: { select: { rsvps: true } },
 };
 
-// Branch event → branch ADMIN; cluster event → cluster MODERATOR; global → SUPER_ADMIN.
-async function assertCanCreate(userId: string, role: string, branchId?: string, clusterId?: string) {
+// Who may create / edit / delete an event of a given scope:
+// branch event → branch ADMIN; cluster event → cluster MODERATOR; global → SUPER_ADMIN.
+async function assertCanManage(userId: string, role: string, branchId?: string | null, clusterId?: string | null) {
   if (role === 'SUPER_ADMIN') return;
   if (branchId) {
     const m = await prisma.branchMembership.findUnique({ where: { userId_branchId: { userId, branchId } } });
     if (m?.role === 'ADMIN') return;
-    throw Forbidden('Only branch admins can create branch events');
+    throw Forbidden('Only branch admins can manage branch events');
   }
   if (clusterId) {
     const m = await prisma.clusterMembership.findUnique({ where: { userId_clusterId: { userId, clusterId } } });
     if (m?.role === 'MODERATOR') return;
-    throw Forbidden('Only cluster moderators can create cluster events');
+    throw Forbidden('Only cluster moderators can manage cluster events');
   }
-  throw Forbidden('Only super admins can create global events');
+  throw Forbidden('Only super admins can manage global events');
 }
 
 export const eventService = {
@@ -91,7 +92,7 @@ export const eventService = {
       const c = await prisma.cluster.findUnique({ where: { id: dto.clusterId }, select: { id: true } });
       if (!c) throw BadRequest('Cluster not found');
     }
-    await assertCanCreate(userId, role, dto.branchId, dto.clusterId);
+    await assertCanManage(userId, role, dto.branchId, dto.clusterId);
 
     return prisma.event.create({
       data: {
@@ -106,6 +107,29 @@ export const eventService = {
       },
       select: EVENT_SELECT,
     });
+  },
+
+  // Edit an event's details (scope stays fixed). Same authority as creating it.
+  async update(userId: string, role: string, eventId: string, dto: UpdateEventInput) {
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true, branchId: true, clusterId: true },
+    });
+    if (!event) throw NotFound('Event not found');
+    await assertCanManage(userId, role, event.branchId, event.clusterId);
+    return prisma.event.update({ where: { id: eventId }, data: dto, select: EVENT_SELECT });
+  },
+
+  // Delete/cancel an event. RSVPs cascade away with it.
+  async remove(userId: string, role: string, eventId: string) {
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { branchId: true, clusterId: true },
+    });
+    if (!event) throw NotFound('Event not found');
+    await assertCanManage(userId, role, event.branchId, event.clusterId);
+    await prisma.event.delete({ where: { id: eventId } });
+    return { ok: true };
   },
 
   async rsvp(userId: string, eventId: string, status: 'GOING' | 'INTERESTED' | 'NOT_GOING') {

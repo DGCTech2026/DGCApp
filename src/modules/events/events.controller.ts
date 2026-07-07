@@ -11,6 +11,12 @@ export const eventController = {
   async create(req: Request, res: Response) {
     res.status(201).json(await eventService.create(req.user!.sub, req.user!.role, req.body));
   },
+  async update(req: Request, res: Response) {
+    res.json(await eventService.update(req.user!.sub, req.user!.role, req.params.eventId as string, req.body));
+  },
+  async remove(req: Request, res: Response) {
+    res.json(await eventService.remove(req.user!.sub, req.user!.role, req.params.eventId as string));
+  },
   async rsvp(req: Request, res: Response) {
     res.json(await eventService.rsvp(req.user!.sub, req.params.eventId as string, req.body.status));
   },
