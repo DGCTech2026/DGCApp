@@ -483,6 +483,15 @@ registry.registerPath({
   request: { params: z.object({ branchId: z.string() }), body: json(assignUserSchema) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/clusters/{clusterId}/moderators',
+  tags: ['admin'],
+  summary: 'Assign a cluster moderator',
+  security: bearer,
+  request: { params: z.object({ clusterId: z.string() }), body: json(assignUserSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
 
 // ---- announcements (PRD §4) ----
 registry.registerPath({

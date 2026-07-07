@@ -105,6 +105,17 @@ export const adminService = {
     return { ok: true };
   },
 
+  async assignClusterModerator(clusterId: string, userId: string) {
+    const cluster = await prisma.cluster.findUnique({ where: { id: clusterId }, select: { id: true } });
+    if (!cluster) throw NotFound('Cluster not found');
+    await prisma.clusterMembership.upsert({
+      where: { userId_clusterId: { userId, clusterId } },
+      create: { userId, clusterId, role: 'MODERATOR' },
+      update: { role: 'MODERATOR' },
+    });
+    return { ok: true };
+  },
+
   async setClusterArchived(clusterId: string, archived: boolean) {
     const c = await prisma.cluster.findUnique({ where: { id: clusterId }, select: { id: true } });
     if (!c) throw NotFound('Cluster not found');

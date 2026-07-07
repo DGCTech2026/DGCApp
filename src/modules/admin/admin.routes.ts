@@ -18,5 +18,6 @@ adminRouter.post('/users/:userId/unsuspend', asyncHandler(adminController.unsusp
 adminRouter.post('/users/:userId/role', validate(setRoleSchema), asyncHandler(adminController.setRole));
 adminRouter.post('/branches', validate(createBranchSchema), asyncHandler(adminController.createBranch));
 adminRouter.post('/branches/:branchId/admins', validate(assignUserSchema), asyncHandler(adminController.assignBranchAdmin));
+adminRouter.post('/clusters/:clusterId/moderators', validate(assignUserSchema), asyncHandler(adminController.assignClusterModerator));
 adminRouter.post('/clusters/:clusterId/archive', asyncHandler(adminController.archiveCluster));
 adminRouter.post('/clusters/:clusterId/unarchive', asyncHandler(adminController.unarchiveCluster));
