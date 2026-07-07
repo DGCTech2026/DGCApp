@@ -1,0 +1,66 @@
+import { prisma } from '../../infra/db';
+import { fcm, isPushConfigured } from '../../infra/fcm';
+import { logger } from '../../infra/logger';
+
+type Platform = 'ANDROID' | 'IOS' | 'WEB';
+type PushPayload = { title: string; body?: string | null; data?: Record<string, unknown> };
+
+// FCM data values must all be strings.
+function toStringMap(data?: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(data ?? {})) if (v !== null && v !== undefined) out[k] = String(v);
+  return out;
+}
+
+// Push to a set of tokens; prune any that FCM reports as dead (uninstalled / expired).
+async function sendToTokens(tokens: string[], p: PushPayload) {
+  if (!tokens.length) return;
+  const res = await fcm().sendEachForMulticast({
+    tokens,
+    notification: { title: p.title, ...(p.body ? { body: p.body } : {}) },
+    data: toStringMap(p.data),
+  });
+  const dead: string[] = [];
+  res.responses.forEach((r, i) => {
+    if (!r.success) {
+      const code = r.error?.code;
+      if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-argument') {
+        dead.push(tokens[i]!);
+      }
+    }
+  });
+  if (dead.length) await prisma.deviceToken.deleteMany({ where: { token: { in: dead } } });
+}
+
+export const pushService = {
+  async registerDevice(userId: string, token: string, platform: Platform) {
+    await prisma.deviceToken.upsert({
+      where: { token },
+      create: { userId, token, platform },
+      update: { userId, platform }, // device reused by another account → move the token to this user
+    });
+    return { ok: true };
+  },
+
+  async removeDevice(userId: string, token: string) {
+    await prisma.deviceToken.deleteMany({ where: { userId, token } });
+    return { ok: true };
+  },
+
+  // Fire-and-forget helpers — a push failure must never break the thing that triggered it.
+  async sendToUser(userId: string, p: PushPayload) {
+    if (!isPushConfigured()) return;
+    const rows = await prisma.deviceToken.findMany({ where: { userId }, select: { token: true } });
+    await sendToTokens(rows.map((t) => t.token), p).catch((err) => logger.error({ err, userId }, 'push send failed'));
+  },
+
+  async sendToUsers(userIds: string[], p: PushPayload) {
+    if (!isPushConfigured() || !userIds.length) return;
+    const rows = await prisma.deviceToken.findMany({ where: { userId: { in: userIds } }, select: { token: true } });
+    const tokens = rows.map((r) => r.token);
+    for (let i = 0; i < tokens.length; i += 500) {
+      // FCM multicast caps at 500 tokens per call.
+      await sendToTokens(tokens.slice(i, i + 500), p).catch((err) => logger.error({ err }, 'push batch failed'));
+    }
+  },
+};

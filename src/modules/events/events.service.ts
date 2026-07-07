@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { NotFound, Forbidden, BadRequest } from '../../utils/errors';
+import { pushService } from '../push/push.service';
 import type { CreateEventInput, UpdateEventInput } from './events.schema';
 
 const EVENT_SELECT = {
@@ -201,6 +202,11 @@ export const eventService = {
         });
         notified += res.count;
       }
+      await pushService.sendToUsers(rsvps.map((r) => r.userId), {
+        title: `Upcoming: ${ev.title}`,
+        body: 'Starts soon — tap for details.',
+        data: { eventId: ev.id, startsAt: ev.startsAt.toISOString() },
+      });
       await prisma.event.update({ where: { id: ev.id }, data: { reminderSentAt: new Date() } });
     }
     return { events: events.length, notified };

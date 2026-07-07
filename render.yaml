@@ -50,4 +50,6 @@ services:
         sync: false
       - key: CLOUDINARY_URL
         sync: false
+      - key: FCM_SERVICE_ACCOUNT
+        sync: false # base64-encoded Firebase service-account JSON; push stays off until set
 # NOTE: PORT is injected by Render automatically — do not set it. The server reads process.env.PORT.

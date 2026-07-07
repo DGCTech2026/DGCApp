@@ -3,6 +3,7 @@ import { env } from '../../config/env';
 import { prisma } from '../../infra/db';
 import { logger } from '../../infra/logger';
 import { eventService } from '../../modules/events/events.service';
+import { pushService } from '../../modules/push/push.service';
 
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 const BATCH = 1000;
@@ -43,6 +44,7 @@ export const notificationWorker = new Worker(
         const res = await prisma.notification.createMany({ data: chunk });
         created += res.count;
       }
+      await pushService.sendToUsers(members.map((m) => m.userId), { title, body: body ?? null, data: { channelId, messageId } });
       logger.info({ jobId: job.id, channelId, created }, 'Announcement fan-out complete');
       return;
     }

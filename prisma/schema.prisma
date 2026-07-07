@@ -43,6 +43,12 @@ enum OtpPurpose {
   RESET // password reset (consumed by /auth/reset-password)
 }
 
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
 enum BranchRole {
   MEMBER
   ADMIN
@@ -198,6 +204,7 @@ model User {
   audioParticipations   AudioRoomParticipant[]
   notifications         Notification[]
   reportsFiled          Report[]
+  deviceTokens          DeviceToken[]
 
   @@index([currentStageId])
   @@index([deletedAt])
@@ -223,6 +230,19 @@ model RefreshToken {
   revokedAt DateTime?
   createdAt DateTime  @default(now())
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// FCM device tokens for push. token is unique (one device); on upsert it's reassigned to the
+// current user if the same device is reused. Dead tokens are pruned when FCM rejects them.
+model DeviceToken {
+  id        String         @id @default(cuid())
+  userId    String
+  token     String         @unique
+  platform  DevicePlatform
+  createdAt DateTime       @default(now())
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }

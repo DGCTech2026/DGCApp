@@ -15,7 +15,7 @@ import {
   resetPasswordSchema,
   refreshTokenSchema,
 } from '../modules/auth/auth.schema';
-import { updateMeSchema } from '../modules/users/users.schema';
+import { updateMeSchema, registerDeviceSchema, removeDeviceSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
 import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
@@ -144,6 +144,24 @@ registry.registerPath({
   summary: 'Delete my account (hard purge; frees the email/phone for reuse)',
   security: bearer,
   responses: { 200: { description: 'Deleted', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/users/me/devices',
+  tags: ['users'],
+  summary: 'Register this device for push notifications (FCM) — call after login',
+  security: bearer,
+  request: { body: json(registerDeviceSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/users/me/devices',
+  tags: ['users'],
+  summary: 'Unregister a device token (call on logout)',
+  security: bearer,
+  request: { body: json(removeDeviceSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
 // ---- branches ----

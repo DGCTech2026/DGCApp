@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../infra/db';
 import { emitToUser } from '../../infra/realtime';
+import { pushService } from '../push/push.service';
 import { NotFound } from '../../utils/errors';
 
 type NotifType = 'MESSAGE' | 'MENTION' | 'GROWTH' | 'EVENT' | 'REPORT' | 'SYSTEM';
@@ -30,6 +31,11 @@ export const notificationService = {
       select: SELECT,
     });
     emitToUser(userId, 'notification:new', n);
+    void pushService.sendToUser(userId, {
+      title: input.title,
+      body: input.body ?? null,
+      data: input.data as Record<string, unknown> | undefined,
+    });
     return n;
   },
 

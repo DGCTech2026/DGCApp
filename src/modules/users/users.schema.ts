@@ -23,3 +23,10 @@ export const updateMeSchema = z
   .strict();
 
 export type UpdateMeInput = z.infer<typeof updateMeSchema>;
+
+// FCM device registration for push notifications.
+export const registerDeviceSchema = z.object({
+  token: z.string().min(1),
+  platform: z.enum(['ANDROID', 'IOS', 'WEB']),
+});
+export const removeDeviceSchema = z.object({ token: z.string().min(1) });
