@@ -18,9 +18,9 @@ export const eventController = {
     res.json(await eventService.remove(req.user!.sub, req.user!.role, req.params.eventId as string));
   },
   async rsvp(req: Request, res: Response) {
-    res.json(await eventService.rsvp(req.user!.sub, req.params.eventId as string, req.body.status));
+    res.json(await eventService.rsvp(req.user!.sub, req.user!.role, req.params.eventId as string, req.body.status));
   },
   async checkIn(req: Request, res: Response) {
-    res.json(await eventService.checkIn(req.user!.sub, req.params.eventId as string));
+    res.json(await eventService.checkIn(req.user!.sub, req.user!.role, req.params.eventId as string));
   },
 };

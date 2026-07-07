@@ -35,6 +35,22 @@ async function assertCanManage(userId: string, role: string, branchId?: string |
   throw Forbidden('Only super admins can manage global events');
 }
 
+// Who may RSVP / check in: anyone for a global event, otherwise a member of the event's branch or
+// cluster (super admins bypass).
+async function assertCanAttend(userId: string, role: string, event: { branchId: string | null; clusterId: string | null }) {
+  if (role === 'SUPER_ADMIN') return;
+  if (!event.branchId && !event.clusterId) return; // global — open to everyone
+  if (event.branchId) {
+    const m = await prisma.branchMembership.findUnique({ where: { userId_branchId: { userId, branchId: event.branchId } } });
+    if (m) return;
+  }
+  if (event.clusterId) {
+    const m = await prisma.clusterMembership.findUnique({ where: { userId_clusterId: { userId, clusterId: event.clusterId } } });
+    if (m) return;
+  }
+  throw Forbidden('This event is only for its branch or cluster members');
+}
+
 export const eventService = {
   // Upcoming events relevant to the user: global + their branches + their clusters.
   async listUpcoming(userId: string) {
@@ -132,9 +148,10 @@ export const eventService = {
     return { ok: true };
   },
 
-  async rsvp(userId: string, eventId: string, status: 'GOING' | 'INTERESTED' | 'NOT_GOING') {
-    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { id: true } });
+  async rsvp(userId: string, role: string, eventId: string, status: 'GOING' | 'INTERESTED' | 'NOT_GOING') {
+    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { branchId: true, clusterId: true } });
     if (!event) throw NotFound('Event not found');
+    await assertCanAttend(userId, role, event);
     await prisma.eventRSVP.upsert({
       where: { eventId_userId: { eventId, userId } },
       create: { eventId, userId, status },
@@ -144,9 +161,10 @@ export const eventService = {
   },
 
   // QR check-in: the QR encodes the event id; scanning hits this endpoint.
-  async checkIn(userId: string, eventId: string) {
-    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { id: true } });
+  async checkIn(userId: string, role: string, eventId: string) {
+    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { branchId: true, clusterId: true } });
     if (!event) throw NotFound('Event not found');
+    await assertCanAttend(userId, role, event);
     const checkedInAt = new Date();
     await prisma.eventRSVP.upsert({
       where: { eventId_userId: { eventId, userId } },
@@ -154,5 +172,37 @@ export const eventService = {
       update: { checkedInAt },
     });
     return { ok: true, checkedInAt };
+  },
+
+  // Runs on a schedule (via the notification worker): notify GOING/INTERESTED attendees of events
+  // starting within the window, once each (guarded by Event.reminderSentAt).
+  async sendDueEventReminders(windowMs = 24 * 60 * 60 * 1000) {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + windowMs);
+    const events = await prisma.event.findMany({
+      where: { reminderSentAt: null, startsAt: { gt: now, lte: windowEnd } },
+      select: { id: true, title: true, startsAt: true },
+    });
+    let notified = 0;
+    for (const ev of events) {
+      const rsvps = await prisma.eventRSVP.findMany({
+        where: { eventId: ev.id, status: { in: ['GOING', 'INTERESTED'] } },
+        select: { userId: true },
+      });
+      for (let i = 0; i < rsvps.length; i += 1000) {
+        const res = await prisma.notification.createMany({
+          data: rsvps.slice(i, i + 1000).map((r) => ({
+            userId: r.userId,
+            type: 'EVENT' as const,
+            title: `Upcoming: ${ev.title}`,
+            body: 'Starts soon — tap for details.',
+            data: { eventId: ev.id, startsAt: ev.startsAt.toISOString() },
+          })),
+        });
+        notified += res.count;
+      }
+      await prisma.event.update({ where: { id: ev.id }, data: { reminderSentAt: new Date() } });
+    }
+    return { events: events.length, notified };
   },
 };

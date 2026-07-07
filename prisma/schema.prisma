@@ -485,6 +485,7 @@ model Event {
   endsAt      DateTime?
   createdById String // scalar audit field
   createdAt   DateTime  @default(now())
+  reminderSentAt DateTime? // set once the pre-event reminder has gone out to attendees (PRD §9)
 
   branch  Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
   cluster Cluster?    @relation(fields: [clusterId], references: [id], onDelete: SetNull)
