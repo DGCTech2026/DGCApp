@@ -393,9 +393,25 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/events',
   tags: ['events'],
-  summary: 'Create an event (branch admin / cluster moderator / super admin)',
+  summary: 'Create an event — set branchId (branch) OR clusterId (cluster) OR neither (global); never both',
   security: bearer,
-  request: { body: json(createEventSchema) },
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: createEventSchema,
+          example: {
+            title: 'Sunday Service',
+            description: 'Weekly service',
+            location: 'DGC Ibadan',
+            startsAt: '2026-07-12T09:00:00.000Z',
+            endsAt: '2026-07-12T11:00:00.000Z',
+            branchId: 'paste a branch id from GET /branches',
+          },
+        },
+      },
+    },
+  },
   responses: {
     201: { description: 'Created event', ...json(z.object({}).passthrough()) },
     403: { description: 'Not permitted', ...json(errorSchema) },
