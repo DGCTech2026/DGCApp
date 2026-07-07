@@ -13,6 +13,8 @@ const ANNOUNCEMENT_SELECT = {
   body: true,
   createdAt: true,
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
+  // Members can react (PRD §4) — reactions post via /messages/:id/reactions and surface here.
+  reactions: { select: { emoji: true, userId: true } },
 } as const;
 
 // The branch "Service Updates" section doubles as the read-only branch announcement channel.
