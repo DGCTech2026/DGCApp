@@ -142,7 +142,7 @@ async function main() {
     for (const section of BRANCH_SECTIONS) {
       await findOrCreateChannel(
         { type: 'BRANCH_SECTION', branchId: branch.id, name: section },
-        { type: 'BRANCH_SECTION', branchId: branch.id, name: section },
+        { type: 'BRANCH_SECTION', branchId: branch.id, name: section, isReadOnly: section === 'Service Updates' },
       );
     }
   }

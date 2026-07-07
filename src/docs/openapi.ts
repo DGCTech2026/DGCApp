@@ -540,6 +540,27 @@ registry.registerPath({
   request: { params: z.object({ userId: z.string() }) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/branches/{branchId}/announcements',
+  tags: ['announcements'],
+  summary: 'List a branch\'s announcements (Service Updates channel)',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string() }) },
+  responses: { 200: { description: 'Branch announcements', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/branches/{branchId}/announcements',
+  tags: ['announcements'],
+  summary: 'Post a branch announcement (branch admin or super admin) — notifies branch members',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string() }), body: json(postAnnouncementSchema) },
+  responses: {
+    201: { description: 'Created announcement', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not authorized', ...json(errorSchema) },
+  },
+});
 
 // Rendered as Markdown at the top of Swagger UI (/docs) — the frontend integration guide so the
 // app team can self-serve the flows without a separate repo doc. Array-of-lines (single-quoted) so

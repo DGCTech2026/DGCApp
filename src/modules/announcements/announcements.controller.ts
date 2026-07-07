@@ -10,6 +10,16 @@ export const announcementController = {
     res.status(201).json(await announcementService.post(req.user!.sub, req.user!.role, req.body));
   },
 
+  async listBranch(req: Request, res: Response) {
+    res.json(await announcementService.listBranch(req.params.branchId as string));
+  },
+
+  async postBranch(req: Request, res: Response) {
+    res.status(201).json(
+      await announcementService.postBranch(req.user!.sub, req.user!.role, req.params.branchId as string, req.body),
+    );
+  },
+
   async listAdmins(_req: Request, res: Response) {
     res.json(await announcementService.listAdmins());
   },

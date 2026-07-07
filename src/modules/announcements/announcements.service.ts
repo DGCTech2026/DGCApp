@@ -4,8 +4,9 @@ import { emitToChannel } from '../../infra/realtime';
 import { Forbidden, NotFound } from '../../utils/errors';
 import type { PostAnnouncementInput } from './announcements.schema';
 
-// PRD §4: the Global Announcement channel. Official leadership comms — read-only for members,
-// posted by Super Admins + authorized "Announcement Admins" (= ADMIN/MODERATOR on this channel).
+// PRD §4/§3: official comms. The Global Announcement channel is org-wide; each branch's read-only
+// "Service Updates" section is its branch announcement channel. Both are posted only by super admins
+// + authorized posters (channel admins / branch admins) and fanned out to their members.
 const ANNOUNCEMENT_SELECT = {
   id: true,
   title: true,
@@ -14,25 +15,56 @@ const ANNOUNCEMENT_SELECT = {
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
 } as const;
 
+// The branch "Service Updates" section doubles as the read-only branch announcement channel.
+const BRANCH_ANNOUNCEMENT_SECTION = 'Service Updates';
+
 async function globalChannelId(): Promise<string> {
   const ch = await prisma.channel.findFirst({ where: { type: 'GLOBAL_ANNOUNCEMENT' }, select: { id: true } });
   if (!ch) throw NotFound('Global announcement channel not found');
   return ch.id;
 }
 
+async function branchChannelId(branchId: string): Promise<string> {
+  const ch = await prisma.channel.findFirst({
+    where: { branchId, type: 'BRANCH_SECTION', name: BRANCH_ANNOUNCEMENT_SECTION },
+    select: { id: true },
+  });
+  if (!ch) throw NotFound('Branch announcement channel not found');
+  return ch.id;
+}
+
+// Post to an announcement channel + fan out a Notification to every member off the request path.
+async function broadcast(channelId: string, userId: string, input: PostAnnouncementInput) {
+  const message = await prisma.message.create({
+    data: { channelId, senderId: userId, type: 'TEXT', title: input.title, body: input.body },
+    select: ANNOUNCEMENT_SELECT,
+  });
+  emitToChannel(channelId, 'message:new', message); // live for members currently connected
+  await notificationQueue.add('announcement-fanout', {
+    channelId,
+    messageId: message.id,
+    title: input.title,
+    body: input.body,
+    excludeUserId: userId,
+  });
+  return message;
+}
+
+function listChannel(channelId: string) {
+  return prisma.message.findMany({
+    where: { channelId, deletedAt: null },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+    select: ANNOUNCEMENT_SELECT,
+  });
+}
+
 export const announcementService = {
-  // Read feed (Home → Announcements, §14). Org-wide readable for any authenticated user.
+  // --- Global announcements (§4) ---
   async list() {
-    const channelId = await globalChannelId();
-    return prisma.message.findMany({
-      where: { channelId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      take: 30,
-      select: ANNOUNCEMENT_SELECT,
-    });
+    return listChannel(await globalChannelId());
   },
 
-  // Post an announcement. Super admin, or an authorized announcement admin (ADMIN/MODERATOR here).
   async post(userId: string, role: string, input: PostAnnouncementInput) {
     const channelId = await globalChannelId();
     if (role !== 'SUPER_ADMIN') {
@@ -44,24 +76,25 @@ export const announcementService = {
         throw Forbidden('Only super admins and announcement admins can post announcements');
       }
     }
+    return broadcast(channelId, userId, input);
+  },
 
-    const message = await prisma.message.create({
-      data: { channelId, senderId: userId, type: 'TEXT', title: input.title, body: input.body },
-      select: ANNOUNCEMENT_SELECT,
-    });
-    emitToChannel(channelId, 'message:new', message); // live for members currently connected
+  // --- Branch announcements (§3) — super admin or that branch's admin ---
+  async listBranch(branchId: string) {
+    return listChannel(await branchChannelId(branchId));
+  },
 
-    // Fan-out to every member's notification centre off the request path (§12). The BullMQ worker
-    // batches the inserts (this is the 10k-recipient fan-out chat.service deliberately defers here).
-    // FCM push delivery hooks into the same job later.
-    await notificationQueue.add('announcement-fanout', {
-      channelId,
-      messageId: message.id,
-      title: input.title,
-      body: input.body,
-      excludeUserId: userId,
-    });
-    return message;
+  async postBranch(userId: string, role: string, branchId: string, input: PostAnnouncementInput) {
+    if (role !== 'SUPER_ADMIN') {
+      const bm = await prisma.branchMembership.findUnique({
+        where: { userId_branchId: { userId, branchId } },
+        select: { role: true },
+      });
+      if (bm?.role !== 'ADMIN') {
+        throw Forbidden('Only super admins and branch admins can post branch announcements');
+      }
+    }
+    return broadcast(await branchChannelId(branchId), userId, input);
   },
 
   // --- Announcement-admin management (Super Admin only, PRD §4) ---
@@ -88,7 +121,6 @@ export const announcementService = {
 
   async revokeAdmin(userId: string) {
     const channelId = await globalChannelId();
-    // Demote to MEMBER — they keep reading the channel, they just can't post any more.
     await prisma.channelMembership.updateMany({ where: { userId, channelId }, data: { role: 'MEMBER' } });
     return { ok: true };
   },

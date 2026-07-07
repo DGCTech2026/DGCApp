@@ -89,7 +89,12 @@ export const adminService = {
       data: { name: input.name, city: input.city, country: input.country ?? 'Nigeria' },
     });
     await prisma.channel.createMany({
-      data: BRANCH_SECTIONS.map((name) => ({ type: 'BRANCH_SECTION' as const, branchId: branch.id, name })),
+      data: BRANCH_SECTIONS.map((name) => ({
+        type: 'BRANCH_SECTION' as const,
+        branchId: branch.id,
+        name,
+        isReadOnly: name === 'Service Updates', // the branch announcement channel (PRD §3)
+      })),
     });
     return branch;
   },
