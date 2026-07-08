@@ -20,6 +20,9 @@ export const eventController = {
   async rsvp(req: Request, res: Response) {
     res.json(await eventService.rsvp(req.user!.sub, req.user!.role, req.params.eventId as string, req.body.status));
   },
+  async unrsvp(req: Request, res: Response) {
+    res.json(await eventService.unrsvp(req.user!.sub, req.params.eventId as string));
+  },
   async checkIn(req: Request, res: Response) {
     res.json(await eventService.checkIn(req.user!.sub, req.user!.role, req.params.eventId as string));
   },

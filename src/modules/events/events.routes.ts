@@ -13,4 +13,5 @@ eventsRouter.get('/:eventId', authenticate, asyncHandler(eventController.get));
 eventsRouter.patch('/:eventId', authenticate, validate(updateEventSchema), asyncHandler(eventController.update));
 eventsRouter.delete('/:eventId', authenticate, asyncHandler(eventController.remove));
 eventsRouter.post('/:eventId/rsvp', authenticate, validate(rsvpSchema), asyncHandler(eventController.rsvp));
+eventsRouter.delete('/:eventId/rsvp', authenticate, asyncHandler(eventController.unrsvp));
 eventsRouter.post('/:eventId/checkin', authenticate, asyncHandler(eventController.checkIn));

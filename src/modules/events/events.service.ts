@@ -161,6 +161,12 @@ export const eventService = {
     return { ok: true };
   },
 
+  // Withdraw an RSVP entirely (undo) — removes the row, unlike NOT_GOING which keeps a decline.
+  async unrsvp(userId: string, eventId: string) {
+    await prisma.eventRSVP.deleteMany({ where: { eventId, userId } });
+    return { ok: true };
+  },
+
   // QR check-in: the QR encodes the event id; scanning hits this endpoint.
   async checkIn(userId: string, role: string, eventId: string) {
     const event = await prisma.event.findUnique({ where: { id: eventId }, select: { branchId: true, clusterId: true } });

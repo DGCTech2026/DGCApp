@@ -478,6 +478,15 @@ registry.registerPath({
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/events/{eventId}/rsvp',
+  tags: ['events'],
+  summary: 'Withdraw your RSVP (remove it entirely)',
+  security: bearer,
+  request: { params: z.object({ eventId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
   method: 'post',
   path: '/api/v1/events/{eventId}/checkin',
   tags: ['events'],
