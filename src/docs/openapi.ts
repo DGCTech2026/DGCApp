@@ -221,6 +221,18 @@ registry.registerPath({
   responses: { 200: { description: 'Channels', ...json(z.array(z.object({}).passthrough())) } },
 });
 registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}',
+  tags: ['channels'],
+  summary: 'Get one channel (detail) — must be a member',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: {
+    200: { description: 'Channel', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not a member', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/dm',
   tags: ['channels'],
@@ -254,9 +266,16 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/{channelId}/messages',
   tags: ['chat'],
-  summary: 'Send a message (read-only channels require moderator)',
+  summary: 'Send a message (read-only channels require moderator). Omit replyToId unless replying.',
   security: bearer,
-  request: { params: z.object({ channelId: z.string() }), body: json(sendMessageSchema) },
+  request: {
+    params: z.object({ channelId: z.string() }),
+    body: {
+      content: {
+        'application/json': { schema: sendMessageSchema, example: { type: 'TEXT', body: 'Hello everyone' } },
+      },
+    },
+  },
   responses: {
     201: { description: 'Created message', ...json(z.object({}).passthrough()) },
     403: { description: 'Not a member / read-only', ...json(errorSchema) },
