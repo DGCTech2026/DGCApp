@@ -73,6 +73,8 @@ export const channelService = {
       return {
         id: ch.id,
         type: ch.type,
+        branchId: ch.branchId, // null unless a branch channel — lets the app map channel ↔ branch
+        clusterId: ch.clusterId, // null unless a cluster channel — lets the app map channel ↔ cluster
         name: ch.name ?? ch.branch?.name ?? ch.cluster?.name ?? peer?.displayName ?? null,
         isReadOnly: ch.isReadOnly,
         role: m.role,
