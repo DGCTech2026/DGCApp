@@ -352,6 +352,7 @@ model Message {
   title     String? // set for announcements (title + body); null for normal chat messages
   body      String?
   mediaUrl  String? // Cloudinary URL; metadata in Media if catalogued
+  forwardedFromId String? // original message id when this is a forward (scalar audit field)
 
   replyToId String?
   replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id])

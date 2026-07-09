@@ -126,4 +126,20 @@ export const channelService = {
       select: CHANNEL_SELECT,
     });
   },
+
+  // Channel members (PRD §7 "who's in this group"). Capped page for now — add cursor paging when a
+  // branch channel gets large.
+  async members(userId: string, role: string, channelId: string, limit = 50) {
+    await this.requireMember(userId, role, channelId);
+    const [memberCount, rows] = await Promise.all([
+      prisma.channelMembership.count({ where: { channelId } }),
+      prisma.channelMembership.findMany({
+        where: { channelId },
+        orderBy: { joinedAt: 'asc' },
+        take: Math.min(limit, 200),
+        select: { role: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
+      }),
+    ]);
+    return { memberCount, members: rows.map((r) => ({ ...r.user, role: r.role })) };
+  },
 };

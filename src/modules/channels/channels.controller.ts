@@ -14,4 +14,7 @@ export const channelController = {
   async openDm(req: Request, res: Response) {
     res.status(201).json(await channelService.openDm(req.user!.sub, req.body.userId));
   },
+  async members(req: Request, res: Response) {
+    res.json(await channelService.members(req.user!.sub, req.user!.role, req.params.channelId as string));
+  },
 };

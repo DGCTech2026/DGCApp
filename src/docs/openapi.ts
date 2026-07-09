@@ -17,7 +17,7 @@ import {
 } from '../modules/auth/auth.schema';
 import { updateMeSchema, registerDeviceSchema, removeDeviceSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
-import { sendMessageSchema, reactionSchema } from '../modules/chat/chat.schema';
+import { sendMessageSchema, reactionSchema, editMessageSchema, forwardMessageSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, updateEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
@@ -278,6 +278,48 @@ registry.registerPath({
   },
   responses: {
     201: { description: 'Created message', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not a member / read-only', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/messages/search',
+  tags: ['chat'],
+  summary: 'Search a channel\'s messages (?q=term)',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }), query: z.object({ q: z.string() }) },
+  responses: { 200: { description: 'Matching messages', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/members',
+  tags: ['channels'],
+  summary: 'List a channel\'s members (who is in this group) + count',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: { 200: { description: 'Members + memberCount', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'patch',
+  path: '/api/v1/messages/{messageId}',
+  tags: ['chat'],
+  summary: 'Edit your own message',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(editMessageSchema) },
+  responses: {
+    200: { description: 'Updated message', ...json(z.object({}).passthrough()) },
+    403: { description: 'Not your message', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/forward',
+  tags: ['chat'],
+  summary: 'Forward a message to another channel { channelId }',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(forwardMessageSchema) },
+  responses: {
+    201: { description: 'Forwarded message', ...json(z.object({}).passthrough()) },
     403: { description: 'Not a member / read-only', ...json(errorSchema) },
   },
 });

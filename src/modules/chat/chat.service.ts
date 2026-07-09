@@ -14,6 +14,7 @@ const MESSAGE_SELECT = {
   body: true,
   mediaUrl: true,
   replyToId: true,
+  forwardedFromId: true,
   pinnedById: true,
   pinnedAt: true,
   createdAt: true,
@@ -90,6 +91,25 @@ export const chatService = {
         });
       }
     }
+
+    // @mentions — notify the tagged users who are members of this channel (PRD §7).
+    if (dto.mentions?.length) {
+      const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
+      if (targets.length) {
+        const members = await prisma.channelMembership.findMany({
+          where: { channelId, userId: { in: targets } },
+          select: { userId: true },
+        });
+        for (const m of members) {
+          await notificationService.notify(m.userId, {
+            type: 'MENTION',
+            title: `${message.sender.displayName ?? 'Someone'} mentioned you`,
+            body: message.body ?? '',
+            data: { channelId, messageId: message.id },
+          });
+        }
+      }
+    }
     return message;
   },
 
@@ -111,7 +131,19 @@ export const chatService = {
     const hasMore = rows.length > opts.limit;
     const messages = rows.slice(0, opts.limit);
     const last = messages[messages.length - 1];
-    return { messages, nextCursor: hasMore && last ? encodeCursor(last) : null };
+
+    // Read receipts (DM ticks): the peer's lastReadAt tells the client which of my messages they've
+    // read. For groups this is null (read state there is per-member, surfaced as unread counts).
+    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { type: true } });
+    let peerLastReadAt: Date | null = null;
+    if (channel?.type === 'DM') {
+      const peer = await prisma.channelMembership.findFirst({
+        where: { channelId, userId: { not: userId } },
+        select: { lastReadAt: true },
+      });
+      peerLastReadAt = peer?.lastReadAt ?? null;
+    }
+    return { messages, nextCursor: hasMore && last ? encodeCursor(last) : null, peerLastReadAt };
   },
 
   async addReaction(userId: string, role: string, messageId: string, emoji: string) {
@@ -168,5 +200,62 @@ export const chatService = {
     });
     emitToChannel(msg.channelId, 'message:deleted', { messageId });
     return { ok: true };
+  },
+
+  // Edit your own message (PRD §7). Sets editedAt and broadcasts message:edited.
+  async edit(userId: string, messageId: string, body: string) {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { channelId: true, senderId: true, deletedAt: true },
+    });
+    if (!msg || msg.deletedAt) throw NotFound('Message not found');
+    if (msg.senderId !== userId) throw Forbidden('You can only edit your own messages');
+    const message = await prisma.message.update({
+      where: { id: messageId },
+      data: { body, editedAt: new Date() },
+      select: MESSAGE_SELECT,
+    });
+    emitToChannel(msg.channelId, 'message:edited', message);
+    return message;
+  },
+
+  // Forward a message into another channel you can post to (PRD §7). Copies the content and links
+  // back via forwardedFromId so the client can render a "Forwarded" label.
+  async forward(userId: string, role: string, messageId: string, targetChannelId: string) {
+    const src = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { channelId: true, type: true, body: true, mediaUrl: true, deletedAt: true },
+    });
+    if (!src || src.deletedAt) throw NotFound('Message not found');
+    await channelService.requireMember(userId, role, src.channelId); // can read the source
+    const membership = await channelService.requireMember(userId, role, targetChannelId); // can post to target
+    const target = await prisma.channel.findUnique({ where: { id: targetChannelId }, select: { isReadOnly: true } });
+    if (!target) throw NotFound('Target channel not found');
+    if (target.isReadOnly && !isModerator(role, membership?.role)) throw Forbidden('Target channel is read-only');
+
+    const message = await prisma.message.create({
+      data: {
+        channelId: targetChannelId,
+        senderId: userId,
+        type: src.type,
+        body: src.body,
+        mediaUrl: src.mediaUrl,
+        forwardedFromId: messageId,
+      },
+      select: MESSAGE_SELECT,
+    });
+    emitToChannel(targetChannelId, 'message:new', message);
+    return message;
+  },
+
+  // Search a channel's messages (PRD §7). Case-insensitive substring on the body.
+  async search(userId: string, role: string, channelId: string, q: string) {
+    await channelService.requireMember(userId, role, channelId);
+    return prisma.message.findMany({
+      where: { channelId, deletedAt: null, body: { contains: q, mode: 'insensitive' } },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      select: MESSAGE_SELECT,
+    });
   },
 };

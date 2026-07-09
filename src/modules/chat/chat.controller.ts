@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { chatService } from './chat.service';
-import { listMessagesSchema } from './chat.schema';
+import { listMessagesSchema, searchMessagesSchema } from './chat.schema';
 import { BadRequest } from '../../utils/errors';
 
 export const chatController = {
@@ -28,5 +28,16 @@ export const chatController = {
   },
   async remove(req: Request, res: Response) {
     res.json(await chatService.remove(req.user!.sub, req.user!.role, req.params.messageId as string));
+  },
+  async edit(req: Request, res: Response) {
+    res.json(await chatService.edit(req.user!.sub, req.params.messageId as string, req.body.body));
+  },
+  async forward(req: Request, res: Response) {
+    res.status(201).json(await chatService.forward(req.user!.sub, req.user!.role, req.params.messageId as string, req.body.channelId));
+  },
+  async search(req: Request, res: Response) {
+    const parsed = searchMessagesSchema.safeParse(req.query);
+    if (!parsed.success) throw BadRequest(parsed.error.issues.map((i) => i.message).join(', '));
+    res.json(await chatService.search(req.user!.sub, req.user!.role, req.params.channelId as string, parsed.data.q));
   },
 };

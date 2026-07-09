@@ -13,6 +13,8 @@ channelsRouter.get('/', authenticate, asyncHandler(channelController.listMine));
 channelsRouter.post('/dm', authenticate, validate(openDmSchema), asyncHandler(channelController.openDm));
 channelsRouter.get('/:channelId', authenticate, asyncHandler(channelController.get));
 channelsRouter.post('/:channelId/read', authenticate, asyncHandler(channelController.markRead));
+channelsRouter.get('/:channelId/members', authenticate, asyncHandler(channelController.members));
+channelsRouter.get('/:channelId/messages/search', authenticate, asyncHandler(chatController.search));
 channelsRouter.get('/:channelId/messages', authenticate, asyncHandler(chatController.list));
 channelsRouter.post(
   '/:channelId/messages',

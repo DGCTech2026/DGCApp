@@ -5,7 +5,12 @@ export const sendMessageSchema = z.object({
   body: z.string().max(4000).optional(),
   mediaUrl: z.string().url().optional(),
   replyToId: z.string().optional(),
+  mentions: z.array(z.string()).optional(), // user ids to @mention (notified if they're channel members)
 });
+
+export const editMessageSchema = z.object({ body: z.string().min(1).max(4000) });
+export const forwardMessageSchema = z.object({ channelId: z.string().min(1) });
+export const searchMessagesSchema = z.object({ q: z.string().min(1).max(100) });
 
 export const listMessagesSchema = z.object({
   cursor: z.string().optional(),
