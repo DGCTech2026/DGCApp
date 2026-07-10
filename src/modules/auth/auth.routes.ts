@@ -12,6 +12,7 @@ import {
   verifyOtpUnifiedSchema,
   loginSchema,
   setPasswordSchema,
+  verifyResetOtpSchema,
   resetPasswordSchema,
   refreshTokenSchema,
 } from './auth.schema';
@@ -52,6 +53,12 @@ authRouter.post(
   validate(requestOtpSchema),
   otpRequestRateLimit,
   asyncHandler(authController.requestPasswordResetOtp),
+);
+authRouter.post(
+  '/password/verify-otp',
+  validate(verifyResetOtpSchema),
+  passwordResetRateLimit,
+  asyncHandler(authController.verifyResetOtp),
 );
 authRouter.post(
   '/reset-password',

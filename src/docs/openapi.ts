@@ -12,6 +12,7 @@ import {
   verifyOtpUnifiedSchema,
   loginSchema,
   setPasswordSchema,
+  verifyResetOtpSchema,
   resetPasswordSchema,
   refreshTokenSchema,
 } from '../modules/auth/auth.schema';
@@ -72,6 +73,7 @@ const publicAuth: [string, string, z.ZodTypeAny, z.ZodTypeAny][] = [
   ['/api/v1/auth/apple', 'Sign in with an Apple ID token (needs Apple config)', appleAuthSchema, tokenSchema],
   ['/api/v1/auth/login', 'Sign in with email + password (rate-limited)', loginSchema, tokenSchema],
   ['/api/v1/auth/password/request-otp', 'Forgot password: email a reset code (public, rate-limited)', requestOtpSchema, okSchema],
+  ['/api/v1/auth/password/verify-otp', 'Verify reset OTP is correct (does NOT consume it — call reset-password next)', verifyResetOtpSchema, okSchema],
   ['/api/v1/auth/reset-password', 'Reset password with a code from /auth/password/request-otp', resetPasswordSchema, tokenSchema],
   ['/api/v1/auth/refresh', 'Rotate refresh token for a new token pair', refreshTokenSchema, tokenSchema],
 ];
@@ -779,7 +781,7 @@ const apiDescription = [
   '## Login, forgot password, refresh, logout',
   '',
   '- Login (email + password): `POST /api/v1/auth/login` with `{ "email", "password" }`, returns a token pair.',
-  '- Forgot password: `POST /api/v1/auth/password/request-otp` with `{ "email" }`, then `POST /api/v1/auth/reset-password` with `{ "email", "code", "newPassword" }` (also signs them in).',
+  '- Forgot password: `POST /api/v1/auth/password/request-otp` with `{ "email" }`, then `POST /api/v1/auth/password/verify-otp` with `{ "email", "code" }` to confirm the code, then `POST /api/v1/auth/reset-password` with `{ "email", "code", "newPassword" }` to change the password (also signs them in).',
   '- Refresh: `POST /api/v1/auth/refresh` with `{ "refreshToken" }` (no Bearer header). Returns a new pair; the old refresh token stops working.',
   '- Logout: `POST /api/v1/auth/logout` with `{ "refreshToken" }` (Bearer header).',
   '',

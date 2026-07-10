@@ -49,6 +49,10 @@ export const authController = {
     res.json({ ok: true });
   },
 
+  async verifyResetOtp(req: Request, res: Response) {
+    res.json(await authService.verifyResetOtp(req.body.email, req.body.code));
+  },
+
   async resetPassword(req: Request, res: Response) {
     res.json(await authService.resetPassword(req.body.email, req.body.code, req.body.newPassword));
   },

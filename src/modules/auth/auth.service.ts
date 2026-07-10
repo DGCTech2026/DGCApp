@@ -305,6 +305,25 @@ export const authService = {
     await emailQueue.add('send-otp', { type: 'otp', to: id, code });
   },
 
+  // Forgot-password step 1.5: verify the RESET code is correct without consuming it.
+  // Returns { ok: true } so the frontend can show the "enter new password" screen.
+  async verifyResetOtp(email: string, code: string) {
+    const id = norm(email);
+    const record = await prisma.otp.findUnique({ where: { identifier: id } });
+    if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+    if (record.purpose !== 'RESET') throw BadRequest('This code was not issued for a password reset');
+    if (record.attempts >= MAX_OTP_ATTEMPTS) {
+      await prisma.otp.delete({ where: { identifier: id } });
+      throw BadRequest('Too many attempts. Request a new code.');
+    }
+    const valid = await verifyOtpHash(record.hash, code);
+    if (!valid) {
+      await prisma.otp.update({ where: { identifier: id }, data: { attempts: { increment: 1 } } });
+      throw BadRequest('Invalid OTP');
+    }
+    return { ok: true };
+  },
+
   // Forgot-password step 2: RESET-purpose code + new password. A login/registration code is
   // rejected here (wrong purpose), so it can't be replayed to take over an account.
   async resetPassword(email: string, code: string, newPassword: string) {

@@ -36,6 +36,10 @@ export const setPasswordSchema = z.object({
   password: z.string().min(8).max(128),
   currentPassword: z.string().optional(), // required only when changing an existing password
 });
+export const verifyResetOtpSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+});
 export const resetPasswordSchema = z.object({
   email: z.string().email(),
   code: z.string().length(6),
