@@ -79,6 +79,8 @@ enum MessageType {
   AUDIO
   FILE
   SYSTEM
+  POLL
+  CONTACT
 }
 
 enum GrowthStageKey {
@@ -203,6 +205,7 @@ model User {
   eventRsvps            EventRSVP[]
   audioParticipations   AudioRoomParticipant[]
   notifications         Notification[]
+  pollVotes             PollVote[]
   reportsFiled          Report[]
   deviceTokens          DeviceToken[]
 
@@ -354,6 +357,15 @@ model Message {
   mediaUrl  String? // Cloudinary URL; metadata in Media if catalogued
   forwardedFromId String? // original message id when this is a forward (scalar audit field)
 
+  // Contact sharing (type = CONTACT)
+  contactName  String?
+  contactPhone String?
+  contactEmail String?
+
+  // Poll (type = POLL) — details live in the Poll model
+  pollId String? @unique
+  poll   Poll?   @relation(fields: [pollId], references: [id])
+
   replyToId String?
   replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id])
   replies   Message[] @relation("MessageReplies")
@@ -404,6 +416,46 @@ model Reaction {
 
   @@unique([messageId, userId, emoji])
   @@index([messageId])
+}
+
+// ============================================================================
+// Polls (in-chat voting — CLAUDE.md §7)
+// ============================================================================
+
+model Poll {
+  id            String       @id @default(cuid())
+  question      String
+  allowMultiple Boolean      @default(false)
+  expiresAt     DateTime?
+  createdAt     DateTime     @default(now())
+
+  message Message?
+  options PollOption[]
+}
+
+model PollOption {
+  id     String @id @default(cuid())
+  pollId String
+  text   String
+  order  Int    @default(0)
+
+  poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes PollVote[]
+
+  @@index([pollId])
+}
+
+model PollVote {
+  id       String   @id @default(cuid())
+  optionId String
+  userId   String
+  votedAt  DateTime @default(now())
+
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+  @@index([userId])
 }
 
 // ============================================================================

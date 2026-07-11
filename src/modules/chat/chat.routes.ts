@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { reactionSchema, editMessageSchema, forwardMessageSchema } from './chat.schema';
+import { reactionSchema, editMessageSchema, forwardMessageSchema, pollVoteSchema } from './chat.schema';
 import { chatController } from './chat.controller';
 
 // Mounted at /messages — message-scoped operations.
@@ -15,3 +15,5 @@ messagesRouter.post('/:messageId/unpin', authenticate, asyncHandler(chatControll
 messagesRouter.post('/:messageId/forward', authenticate, validate(forwardMessageSchema), asyncHandler(chatController.forward));
 messagesRouter.patch('/:messageId', authenticate, validate(editMessageSchema), asyncHandler(chatController.edit));
 messagesRouter.delete('/:messageId', authenticate, asyncHandler(chatController.remove));
+messagesRouter.post('/:messageId/poll/vote', authenticate, validate(pollVoteSchema), asyncHandler(chatController.votePoll));
+messagesRouter.post('/:messageId/poll/retract', authenticate, validate(pollVoteSchema), asyncHandler(chatController.retractVote));

@@ -18,7 +18,7 @@ import {
 } from '../modules/auth/auth.schema';
 import { updateMeSchema, registerDeviceSchema, removeDeviceSchema } from '../modules/users/users.schema';
 import { uploadSignatureSchema } from '../modules/media/media.schema';
-import { sendMessageSchema, reactionSchema, editMessageSchema, forwardMessageSchema } from '../modules/chat/chat.schema';
+import { sendMessageSchema, reactionSchema, editMessageSchema, forwardMessageSchema, pollVoteSchema } from '../modules/chat/chat.schema';
 import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, updateEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
@@ -369,6 +369,26 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ messageId: z.string() }) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+
+// ---- polls ----
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/poll/vote',
+  tags: ['chat'],
+  summary: 'Vote on a poll option (if allowMultiple=false, moves your vote)',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(pollVoteSchema) },
+  responses: { 200: { description: 'Updated poll with vote counts', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/messages/{messageId}/poll/retract',
+  tags: ['chat'],
+  summary: 'Retract your vote from a poll option',
+  security: bearer,
+  request: { params: z.object({ messageId: z.string() }), body: json(pollVoteSchema) },
+  responses: { 200: { description: 'Updated poll with vote counts', ...json(z.object({}).passthrough()) } },
 });
 
 // ---- clusters ----

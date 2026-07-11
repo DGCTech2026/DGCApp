@@ -5,6 +5,22 @@ import { emitToChannel } from '../../infra/realtime';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
 
+const POLL_SELECT = {
+  id: true,
+  question: true,
+  allowMultiple: true,
+  expiresAt: true,
+  options: {
+    orderBy: { order: 'asc' as const },
+    select: {
+      id: true,
+      text: true,
+      order: true,
+      votes: { select: { userId: true } },
+    },
+  },
+};
+
 const MESSAGE_SELECT = {
   id: true,
   channelId: true,
@@ -19,6 +35,10 @@ const MESSAGE_SELECT = {
   pinnedAt: true,
   createdAt: true,
   editedAt: true,
+  contactName: true,
+  contactPhone: true,
+  contactEmail: true,
+  poll: { select: POLL_SELECT },
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
   reactions: { select: { emoji: true, userId: true } },
 };
@@ -42,7 +62,14 @@ function isModerator(role: string, membershipRole: string | undefined) {
 
 export const chatService = {
   async send(userId: string, role: string, channelId: string, dto: SendMessageInput) {
-    if (!dto.body && !dto.mediaUrl) throw BadRequest('A message needs a body or mediaUrl');
+    if (dto.type === 'CONTACT') {
+      if (!dto.contactName) throw BadRequest('contactName is required for CONTACT messages');
+      if (!dto.contactPhone && !dto.contactEmail) throw BadRequest('contactPhone or contactEmail is required');
+    } else if (dto.type === 'POLL') {
+      if (!dto.poll) throw BadRequest('poll object is required for POLL messages');
+    } else if (!dto.body && !dto.mediaUrl) {
+      throw BadRequest('A message needs a body or mediaUrl');
+    }
     const membership = await channelService.requireMember(userId, role, channelId);
 
     const channel = await prisma.channel.findUnique({
@@ -62,6 +89,31 @@ export const chatService = {
       if (!parent || parent.channelId !== channelId) throw BadRequest('Reply target is not in this channel');
     }
 
+    // For POLL messages, create via the relation API so Prisma is happy with types.
+    if (dto.type === 'POLL' && dto.poll) {
+      const poll = await prisma.poll.create({
+        data: {
+          question: dto.poll.question,
+          allowMultiple: dto.poll.allowMultiple,
+          expiresAt: dto.poll.expiresAt ?? null,
+          options: { create: dto.poll.options.map((text, i) => ({ text, order: i })) },
+        },
+      });
+      const message = await prisma.message.create({
+        data: {
+          channelId,
+          senderId: userId,
+          type: 'POLL',
+          body: dto.poll.question,
+          replyToId: dto.replyToId ?? null,
+          pollId: poll.id,
+        },
+        select: MESSAGE_SELECT,
+      });
+      emitToChannel(channelId, 'message:new', message);
+      return message;
+    }
+
     const message = await prisma.message.create({
       data: {
         channelId,
@@ -70,6 +122,9 @@ export const chatService = {
         body: dto.body ?? null,
         mediaUrl: dto.mediaUrl ?? null,
         replyToId: dto.replyToId ?? null,
+        contactName: dto.contactName ?? null,
+        contactPhone: dto.contactPhone ?? null,
+        contactEmail: dto.contactEmail ?? null,
       },
       select: MESSAGE_SELECT,
     });
@@ -257,5 +312,51 @@ export const chatService = {
       take: 30,
       select: MESSAGE_SELECT,
     });
+  },
+
+  // Vote on a poll option. Respects allowMultiple — if false, moves the vote to the new option.
+  async votePoll(userId: string, role: string, messageId: string, optionId: string) {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { channelId: true, type: true, pollId: true, deletedAt: true },
+    });
+    if (!msg || msg.deletedAt || msg.type !== 'POLL' || !msg.pollId) throw NotFound('Poll not found');
+    await channelService.requireMember(userId, role, msg.channelId);
+
+    const option = await prisma.pollOption.findUnique({ where: { id: optionId }, select: { pollId: true } });
+    if (!option || option.pollId !== msg.pollId) throw BadRequest('Option does not belong to this poll');
+
+    const poll = await prisma.poll.findUnique({ where: { id: msg.pollId }, select: { allowMultiple: true, expiresAt: true } });
+    if (poll?.expiresAt && poll.expiresAt < new Date()) throw BadRequest('This poll has expired');
+
+    if (!poll?.allowMultiple) {
+      await prisma.pollVote.deleteMany({ where: { option: { pollId: msg.pollId }, userId } });
+    }
+
+    await prisma.pollVote.upsert({
+      where: { optionId_userId: { optionId, userId } },
+      create: { optionId, userId },
+      update: {},
+    });
+
+    const updated = await prisma.poll.findUnique({ where: { id: msg.pollId }, select: POLL_SELECT });
+    emitToChannel(msg.channelId, 'poll:voted', { messageId, poll: updated });
+    return updated;
+  },
+
+  // Retract a vote from a poll option.
+  async retractVote(userId: string, role: string, messageId: string, optionId: string) {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { channelId: true, type: true, pollId: true, deletedAt: true },
+    });
+    if (!msg || msg.deletedAt || msg.type !== 'POLL' || !msg.pollId) throw NotFound('Poll not found');
+    await channelService.requireMember(userId, role, msg.channelId);
+
+    await prisma.pollVote.deleteMany({ where: { optionId, userId } });
+
+    const updated = await prisma.poll.findUnique({ where: { id: msg.pollId }, select: POLL_SELECT });
+    emitToChannel(msg.channelId, 'poll:voted', { messageId, poll: updated });
+    return updated;
   },
 };

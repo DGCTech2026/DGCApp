@@ -40,4 +40,10 @@ export const chatController = {
     if (!parsed.success) throw BadRequest(parsed.error.issues.map((i) => i.message).join(', '));
     res.json(await chatService.search(req.user!.sub, req.user!.role, req.params.channelId as string, parsed.data.q));
   },
+  async votePoll(req: Request, res: Response) {
+    res.json(await chatService.votePoll(req.user!.sub, req.user!.role, req.params.messageId as string, req.body.optionId));
+  },
+  async retractVote(req: Request, res: Response) {
+    res.json(await chatService.retractVote(req.user!.sub, req.user!.role, req.params.messageId as string, req.body.optionId));
+  },
 };
