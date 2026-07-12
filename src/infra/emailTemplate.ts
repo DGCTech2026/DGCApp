@@ -63,3 +63,28 @@ export function otpEmail(code: string): { subject: string; html: string; text: s
     text: `Your DGC verification code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, you can safely ignore this email.\n\n— Davidic Generation Church\ndavidicgenerationchurch.com`,
   };
 }
+
+export function resetOtpEmail(code: string): { subject: string; html: string; text: string } {
+  const contentHtml = `
+    <h1 style="margin:0 0 12px 0;color:#1f2937;font-size:22px;font-weight:bold;">Reset your password</h1>
+    <p style="margin:0 0 8px 0;color:#4b5563;font-size:15px;line-height:22px;">We received a request to reset the password on your DGC account.</p>
+    <p style="margin:0 0 24px 0;color:#4b5563;font-size:15px;line-height:22px;">Enter the code below in the app to set a new password:</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td align="center" style="padding:4px 0;">
+        <div style="display:inline-block;background-color:#fef3f2;border:1px solid #fecaca;border-radius:10px;padding:18px 30px;">
+          <span style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:bold;letter-spacing:10px;color:#dc2626;">${code}</span>
+        </div>
+      </td></tr>
+    </table>
+    <p style="margin:20px 0 0 0;color:#6b7280;font-size:14px;line-height:20px;text-align:center;">This code expires in <strong>10 minutes</strong>.</p>
+    <p style="margin:24px 0 0 0;color:#4b5563;font-size:14px;line-height:20px;background-color:#fef9e7;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:6px;">
+      <strong>Didn't request a password reset?</strong><br>
+      Someone may have entered your email by mistake. Your password has <em>not</em> been changed — you can safely ignore this email. If you're concerned, sign in and change your password.
+    </p>`;
+
+  return {
+    subject: 'Reset your DGC password',
+    html: renderEmailLayout({ preheader: `Your DGC password reset code is ${code} (expires in 10 minutes).`, contentHtml }),
+    text: `Your DGC password reset code is ${code}. It expires in 10 minutes.\n\nEnter this code in the app to set a new password.\n\nIf you didn't request this, you can safely ignore this email — your password has not been changed.\n\n— Davidic Generation Church\ndavidicgenerationchurch.com`,
+  };
+}

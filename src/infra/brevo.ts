@@ -1,16 +1,23 @@
 import { BrevoClient } from '@getbrevo/brevo';
 import { env } from '../config/env';
-import { otpEmail } from './emailTemplate';
+import { otpEmail, resetOtpEmail } from './emailTemplate';
 
 const client = new BrevoClient({ apiKey: env.BREVO_API_KEY });
 
-export async function sendOtpEmail(to: string, code: string) {
-  const { subject, html, text } = otpEmail(code);
+async function sendEmail(to: string, email: { subject: string; html: string; text: string }) {
   await client.transactionalEmails.sendTransacEmail({
     sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME },
     to: [{ email: to }],
-    subject,
-    htmlContent: html,
-    textContent: text, // multipart (text + html) improves deliverability / spam score
+    subject: email.subject,
+    htmlContent: email.html,
+    textContent: email.text,
   });
+}
+
+export async function sendOtpEmail(to: string, code: string) {
+  await sendEmail(to, otpEmail(code));
+}
+
+export async function sendResetOtpEmail(to: string, code: string) {
+  await sendEmail(to, resetOtpEmail(code));
 }

@@ -302,7 +302,7 @@ export const authService = {
     const user = await prisma.user.findUnique({ where: { email: id }, select: { id: true } });
     if (!user) return;
     const code = await createOtp(id, 'EMAIL', 'RESET');
-    await emailQueue.add('send-otp', { type: 'otp', to: id, code });
+    await emailQueue.add('send-otp', { type: 'reset-otp', to: id, code });
   },
 
   // Forgot-password step 1.5: verify the RESET code is correct without consuming it.
