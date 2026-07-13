@@ -2,6 +2,7 @@ import { prisma } from '../../infra/db';
 import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
 import { emitToUser } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
+import { pushService } from '../push/push.service';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
 import { env } from '../../config/env';
 import type { CreateRoomInput, UpdateRoomInput } from './audio-rooms.schema';
@@ -419,5 +420,64 @@ export const audioRoomService = {
     }
     // Reminders are one-shot — clear them once fired.
     if (reminders.length) await prisma.audioRoomReminder.deleteMany({ where: { roomId } });
+  },
+
+  // Repeatable scan (notification worker, every 5 min): "starting soon" push for scheduled rooms.
+  // Notifies Remind-Me users + nudges the host to go live. Same reminderSentAt pattern as events.
+  // Reminder rows are kept — they fire again as "room is live" when the host actually starts it.
+  async sendDueRoomReminders(windowMs = 15 * 60 * 1000) {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + windowMs);
+    const rooms = await prisma.audioRoom.findMany({
+      where: { status: 'SCHEDULED', reminderSentAt: null, scheduledFor: { gt: now, lte: windowEnd } },
+      select: {
+        id: true,
+        title: true,
+        scheduledFor: true,
+        hostId: true,
+        reminders: { select: { userId: true } },
+      },
+    });
+
+    let notified = 0;
+    for (const room of rooms) {
+      const startsAt = room.scheduledFor!.toISOString();
+
+      // Attendees who tapped Remind Me
+      const attendeeIds = room.reminders.map((r) => r.userId).filter((id) => id !== room.hostId);
+      if (attendeeIds.length) {
+        const payload = {
+          title: `Starting soon: ${room.title}`,
+          body: 'The room goes live in a few minutes — tap to be ready.',
+          data: { roomId: room.id, startsAt },
+        };
+        for (let i = 0; i < attendeeIds.length; i += 1000) {
+          const res = await prisma.notification.createMany({
+            data: attendeeIds.slice(i, i + 1000).map((userId) => ({
+              userId,
+              type: 'SYSTEM' as const,
+              ...payload,
+            })),
+          });
+          notified += res.count;
+        }
+        await pushService.sendToUsers(attendeeIds, payload);
+      }
+
+      // Host nudge — they're the one who has to press Start
+      const hostPayload = {
+        title: `Your room starts soon: ${room.title}`,
+        body: 'Open the app and tap Start when you are ready to go live.',
+        data: { roomId: room.id, startsAt },
+      };
+      await prisma.notification.create({
+        data: { userId: room.hostId, type: 'SYSTEM', ...hostPayload },
+      });
+      await pushService.sendToUser(room.hostId, hostPayload);
+      notified += 1;
+
+      await prisma.audioRoom.update({ where: { id: room.id }, data: { reminderSentAt: new Date() } });
+    }
+    return { rooms: rooms.length, notified };
   },
 };

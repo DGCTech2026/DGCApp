@@ -3,6 +3,7 @@ import { env } from '../../config/env';
 import { prisma } from '../../infra/db';
 import { logger } from '../../infra/logger';
 import { eventService } from '../../modules/events/events.service';
+import { audioRoomService } from '../../modules/audio-rooms/audio-rooms.service';
 import { pushService } from '../../modules/push/push.service';
 
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
@@ -15,6 +16,13 @@ export const notificationWorker = new Worker(
     if (job.name === 'event-reminders-scan') {
       const result = await eventService.sendDueEventReminders();
       logger.info({ jobId: job.id, ...result }, 'Event reminders processed');
+      return;
+    }
+
+    // Scheduled scan: "starting soon" reminders for scheduled audio rooms (PRD §8/§12).
+    if (job.name === 'audio-room-reminders-scan') {
+      const result = await audioRoomService.sendDueRoomReminders();
+      if (result.rooms > 0) logger.info({ jobId: job.id, ...result }, 'Audio room reminders processed');
       return;
     }
 

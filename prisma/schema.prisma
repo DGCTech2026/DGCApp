@@ -615,6 +615,7 @@ model AudioRoom {
   provider       String? // "agora" | "100ms"
   externalRoomId String?
   scheduledFor   DateTime?
+  reminderSentAt DateTime? // pre-start reminder scan marker (same pattern as Event.reminderSentAt)
   startedAt      DateTime?
   endedAt        DateTime?
   createdAt      DateTime        @default(now())
