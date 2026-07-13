@@ -22,7 +22,7 @@ import { sendMessageSchema, reactionSchema, editMessageSchema, forwardMessageSch
 import { openDmSchema } from '../modules/channels/channels.schema';
 import { createEventSchema, updateEventSchema, rsvpSchema } from '../modules/events/events.schema';
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
-import { submitCertificateSchema, adminVerifyRequirementSchema } from '../modules/growth/growth.schema';
+import { submitCertificateSchema, adminVerifyRequirementSchema, rejectCertificateSchema } from '../modules/growth/growth.schema';
 import { postAnnouncementSchema, announcementAdminSchema } from '../modules/announcements/announcements.schema';
 import { createRoomSchema, updateRoomSchema, promoteSchema } from '../modules/audio-rooms/audio-rooms.schema';
 
@@ -522,6 +522,15 @@ registry.registerPath({
 });
 registry.registerPath({
   method: 'post',
+  path: '/api/v1/growth/admin/certificates/{id}/reject',
+  tags: ['growth'],
+  summary: 'Reject a certificate submission (optional reason)',
+  security: bearer,
+  request: { params: z.object({ id: z.string() }), body: json(rejectCertificateSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
   path: '/api/v1/growth/admin/requirements/verify',
   tags: ['growth'],
   summary: 'Admin-verify an ADMIN_VERIFY requirement for a member',
@@ -675,6 +684,24 @@ registry.registerPath({
 });
 registry.registerPath({
   method: 'post',
+  path: '/api/v1/admin/users/{userId}/suspend',
+  tags: ['admin'],
+  summary: 'Suspend a member (blocks sign-in and API access)',
+  security: bearer,
+  request: { params: z.object({ userId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/users/{userId}/unsuspend',
+  tags: ['admin'],
+  summary: 'Lift a member suspension',
+  security: bearer,
+  request: { params: z.object({ userId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
   path: '/api/v1/admin/users/{userId}/role',
   tags: ['admin'],
   summary: 'Set a user global role',
@@ -707,6 +734,24 @@ registry.registerPath({
   summary: 'Assign a cluster moderator',
   security: bearer,
   request: { params: z.object({ clusterId: z.string() }), body: json(assignUserSchema) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/clusters/{clusterId}/archive',
+  tags: ['admin'],
+  summary: 'Archive a cluster (hidden from discovery; chat frozen)',
+  security: bearer,
+  request: { params: z.object({ clusterId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/clusters/{clusterId}/unarchive',
+  tags: ['admin'],
+  summary: 'Restore an archived cluster',
+  security: bearer,
+  request: { params: z.object({ clusterId: z.string() }) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
