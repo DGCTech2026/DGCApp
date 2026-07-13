@@ -11,6 +11,7 @@ import { eventsRouter } from './modules/events/events.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { adminRouter } from './modules/admin/admin.routes';
 import { announcementsRouter } from './modules/announcements/announcements.routes';
+import { audioRoomsRouter } from './modules/audio-rooms/audio-rooms.routes';
 
 export const router = Router();
 
@@ -26,3 +27,4 @@ router.use('/events', eventsRouter);
 router.use('/notifications', notificationsRouter);
 router.use('/admin', adminRouter);
 router.use('/announcements', announcementsRouter);
+router.use('/audio-rooms', audioRoomsRouter);

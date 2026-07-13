@@ -87,6 +87,31 @@ export const notificationWorker = new Worker(
       return;
     }
 
+    if (job.name === 'audio-room-started') {
+      const { roomId, title, userIds } = job.data as {
+        roomId: string;
+        title: string;
+        userIds: string[];
+      };
+      for (let i = 0; i < userIds.length; i += BATCH) {
+        const chunk = userIds.slice(i, i + BATCH).map((userId) => ({
+          userId,
+          type: 'SYSTEM' as const,
+          title: 'Audio room is live',
+          body: title,
+          data: { roomId },
+        }));
+        await prisma.notification.createMany({ data: chunk });
+      }
+      await pushService.sendToUsers(userIds, {
+        title: 'Audio room is live',
+        body: title,
+        data: { roomId },
+      });
+      logger.info({ jobId: job.id, roomId, notified: userIds.length }, 'Audio room start notification complete');
+      return;
+    }
+
     logger.info({ jobId: job.id, name: job.name }, 'Notification job received (no handler)');
   },
   { connection },

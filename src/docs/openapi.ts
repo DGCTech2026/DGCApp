@@ -24,6 +24,7 @@ import { createEventSchema, updateEventSchema, rsvpSchema } from '../modules/eve
 import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/admin/admin.schema';
 import { submitCertificateSchema, adminVerifyRequirementSchema } from '../modules/growth/growth.schema';
 import { postAnnouncementSchema, announcementAdminSchema } from '../modules/announcements/announcements.schema';
+import { createRoomSchema, updateRoomSchema, promoteSchema } from '../modules/audio-rooms/audio-rooms.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -778,6 +779,116 @@ registry.registerPath({
   },
 });
 
+// ─── Audio Rooms ───
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms',
+  tags: ['audio-rooms'],
+  summary: 'Create an audio room (admin only). Starts live immediately unless scheduledFor is set.',
+  security: bearer,
+  request: { body: json(createRoomSchema) },
+  responses: { 201: { description: 'Created room + participants', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/audio-rooms',
+  tags: ['audio-rooms'],
+  summary: 'List audio rooms — filter by ?filter=live|scheduled|ended, ?branchId, ?clusterId',
+  security: bearer,
+  request: { query: z.object({ filter: z.enum(['live', 'scheduled', 'ended']).optional(), branchId: z.string().optional(), clusterId: z.string().optional() }) },
+  responses: { 200: { description: 'Rooms with listener count', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/audio-rooms/{roomId}',
+  tags: ['audio-rooms'],
+  summary: 'Get room detail with current participants',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Room + participants', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'patch',
+  path: '/api/v1/audio-rooms/{roomId}',
+  tags: ['audio-rooms'],
+  summary: 'Update room title/description/schedule (host only)',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }), body: json(updateRoomSchema) },
+  responses: { 200: { description: 'Updated room', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/start',
+  tags: ['audio-rooms'],
+  summary: 'Start a scheduled room (SCHEDULED → LIVE). Host only.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Room now live', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/end',
+  tags: ['audio-rooms'],
+  summary: 'End a live room. Host only.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Room ended', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/join',
+  tags: ['audio-rooms'],
+  summary: 'Join a live room as listener. Returns Agora token.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Participant + Agora credentials', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/leave',
+  tags: ['audio-rooms'],
+  summary: 'Leave a room. If host leaves, next speaker is promoted or room ends.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Left', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/raise-hand',
+  tags: ['audio-rooms'],
+  summary: 'Raise hand to request speaker role (listeners only)',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Hand raised', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/promote',
+  tags: ['audio-rooms'],
+  summary: 'Promote/demote a participant (host only). Promoted speakers get a new Agora token via socket.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }), body: json(promoteSchema) },
+  responses: { 200: { description: 'Role changed', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/audio-rooms/{roomId}/participants/{userId}',
+  tags: ['audio-rooms'],
+  summary: 'Kick a participant from the room (host only)',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string(), userId: z.string() }) },
+  responses: { 200: { description: 'Kicked', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/token',
+  tags: ['audio-rooms'],
+  summary: 'Refresh Agora token (call when token is about to expire, ~55 min)',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'New Agora credentials', ...json(z.object({}).passthrough()) } },
+});
+
 // Rendered as Markdown at the top of Swagger UI (/docs) — the frontend integration guide so the
 // app team can self-serve the flows without a separate repo doc. Array-of-lines (single-quoted) so
 // backticks/JSON quotes inside the Markdown need no escaping.
@@ -910,8 +1021,35 @@ const apiDescription = [
   '| `message:pinned` / `message:unpinned` | listen | `{ messageId }` |',
   '| `message:deleted` | listen | `{ messageId }` |',
   '| `notification:new` | listen | notification object |',
+  '| `audio-room:user-joined` | listen | participant object |',
+  '| `audio-room:user-left` | listen | `{ roomId, userId }` |',
+  '| `audio-room:role-changed` | listen | `{ roomId, userId, role }` |',
+  '| `audio-room:hand-raised` | listen | `{ roomId, userId }` |',
+  '| `audio-room:ended` | listen | `{ roomId }` |',
+  '| `audio-room:kicked` | listen | `{ roomId }` (sent to the kicked user only) |',
+  '| `audio-room:token` | listen | `{ roomId, appId, token, channel, uid }` (sent when promoted to speaker) |',
   '',
   'Sending a message is a REST call (`POST /api/v1/channels/{channelId}/messages`); the server then broadcasts `message:new` to the channel room.',
+  '',
+  '## Audio Rooms (Agora)',
+  '',
+  'Clubhouse-style live audio. The backend manages room lifecycle, participants, and roles; Agora handles the actual audio transport.',
+  '',
+  '### Flow',
+  '',
+  '1. Admin creates room: `POST /api/v1/audio-rooms` — starts live immediately (or set `scheduledFor` for later).',
+  '2. For scheduled rooms, host calls `POST /audio-rooms/:id/start` when ready.',
+  '3. Users join: `POST /audio-rooms/:id/join` — returns an Agora token + `{ appId, channel, uid }`.',
+  '4. On the frontend, use `react-native-agora` with the returned credentials to connect to the audio stream.',
+  '5. Listeners can raise hand: `POST /audio-rooms/:id/raise-hand` — host gets a socket event.',
+  '6. Host promotes: `POST /audio-rooms/:id/promote` with `{ userId, role: "SPEAKER" }` — the promoted user receives a new Agora token via `audio-room:token` socket event (publisher role).',
+  '7. Host can demote back to LISTENER, or kick via `DELETE /audio-rooms/:id/participants/:userId`.',
+  '8. Tokens expire after 1 hour — call `POST /audio-rooms/:id/token` to refresh before expiry.',
+  '9. Host ends room: `POST /audio-rooms/:id/end` — all participants get `audio-room:ended`.',
+  '',
+  '### Agora setup',
+  '',
+  'The backend generates RTC tokens server-side. Set `AGORA_APP_ID` and `AGORA_APP_CERTIFICATE` in the environment. The frontend uses `react-native-agora` with `appId` + `token` + `channelName` + `uid` from the join response.',
 ].join('\n');
 
 export function mountDocs(app: Express) {

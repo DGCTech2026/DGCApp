@@ -23,6 +23,8 @@ const schema = z.object({
   TERMII_API_KEY: z.string().optional(),
   TERMII_SENDER_ID: z.string().default('DGC'),
   TERMII_BASE_URL: z.string().default('https://api.ng.termii.com'),
+  AGORA_APP_ID: z.string().optional(),
+  AGORA_APP_CERTIFICATE: z.string().optional(),
   CORS_ORIGIN: z.string().default('*'),
 });
 
