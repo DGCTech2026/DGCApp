@@ -10,10 +10,16 @@ export const audioRoomController = {
   },
   async list(req: Request, res: Response) {
     const filter = (req.query.filter as 'live' | 'scheduled' | 'ended') || 'live';
-    res.json(await audioRoomService.list(filter, req.query.branchId as string, req.query.clusterId as string));
+    res.json(await audioRoomService.list(req.user!.sub, filter, req.query.branchId as string, req.query.clusterId as string));
   },
   async get(req: Request, res: Response) {
-    res.json(await audioRoomService.get(req.params.roomId as string));
+    res.json(await audioRoomService.get(req.user!.sub, req.params.roomId as string));
+  },
+  async remind(req: Request, res: Response) {
+    res.json(await audioRoomService.remind(req.user!.sub, req.params.roomId as string));
+  },
+  async unremind(req: Request, res: Response) {
+    res.json(await audioRoomService.unremind(req.user!.sub, req.params.roomId as string));
   },
   async start(req: Request, res: Response) {
     res.json(await audioRoomService.start(req.user!.sub, req.user!.role, req.params.roomId as string));

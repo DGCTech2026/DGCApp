@@ -16,6 +16,8 @@ audioRoomsRouter.post('/:roomId/end', authenticate, asyncHandler(audioRoomContro
 audioRoomsRouter.post('/:roomId/join', authenticate, asyncHandler(audioRoomController.join));
 audioRoomsRouter.post('/:roomId/leave', authenticate, asyncHandler(audioRoomController.leave));
 audioRoomsRouter.post('/:roomId/raise-hand', authenticate, asyncHandler(audioRoomController.raiseHand));
+audioRoomsRouter.post('/:roomId/remind', authenticate, asyncHandler(audioRoomController.remind));
+audioRoomsRouter.delete('/:roomId/remind', authenticate, asyncHandler(audioRoomController.unremind));
 audioRoomsRouter.post('/:roomId/promote', authenticate, validate(promoteSchema), asyncHandler(audioRoomController.promote));
 audioRoomsRouter.delete('/:roomId/participants/:userId', authenticate, asyncHandler(audioRoomController.kick));
 audioRoomsRouter.post('/:roomId/token', authenticate, asyncHandler(audioRoomController.refreshToken));

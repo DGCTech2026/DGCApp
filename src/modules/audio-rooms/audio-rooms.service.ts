@@ -83,7 +83,9 @@ export const audioRoomService = {
     });
   },
 
-  async list(filter: 'live' | 'scheduled' | 'ended' = 'live', branchId?: string, clusterId?: string) {
+  // Room cards for the Audio tab. Each card carries what the UI shows: host (name+avatar),
+  // speaker count, listener count, a short avatar preview strip, and the caller's Remind-Me state.
+  async list(userId: string, filter: 'live' | 'scheduled' | 'ended' = 'live', branchId?: string, clusterId?: string) {
     const where: Record<string, unknown> = {};
     if (filter === 'live') where.status = 'LIVE';
     else if (filter === 'scheduled') where.status = 'SCHEDULED';
@@ -91,31 +93,105 @@ export const audioRoomService = {
     if (branchId) where.branchId = branchId;
     if (clusterId) where.clusterId = clusterId;
 
-    return prisma.audioRoom.findMany({
+    const rooms = await prisma.audioRoom.findMany({
       where,
       orderBy: filter === 'scheduled' ? { scheduledFor: 'asc' } : { startedAt: 'desc' },
       take: 50,
       select: {
         ...ROOM_SELECT,
-        _count: { select: { participants: { where: { leftAt: null } } } },
+        // AudioRole enum order is HOST, SPEAKER, LISTENER — so host + speakers sort first.
+        participants: {
+          where: { leftAt: null },
+          orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+          take: 8,
+          select: { role: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
+        },
+        reminders: { where: { userId }, select: { id: true } },
       },
+    });
+    if (!rooms.length) return [];
+
+    // Exact per-role counts in one grouped query (the capped participant strip can't count 234 listeners).
+    const counts = await prisma.audioRoomParticipant.groupBy({
+      by: ['roomId', 'role'],
+      where: { roomId: { in: rooms.map((r) => r.id) }, leftAt: null },
+      _count: true,
+    });
+    const countMap = new Map<string, { speakers: number; listeners: number }>();
+    for (const c of counts) {
+      const entry = countMap.get(c.roomId) ?? { speakers: 0, listeners: 0 };
+      if (c.role === 'LISTENER') entry.listeners += c._count;
+      else entry.speakers += c._count; // HOST + SPEAKER both hold the mic
+      countMap.set(c.roomId, entry);
+    }
+
+    return rooms.map((r) => {
+      const { participants, reminders, ...room } = r;
+      const host = participants.find((p) => p.role === 'HOST')?.user ?? null;
+      const c = countMap.get(r.id) ?? { speakers: 0, listeners: 0 };
+      return {
+        ...room,
+        host,
+        speakerCount: c.speakers,
+        listenerCount: c.listeners,
+        participantsPreview: participants.map((p) => p.user),
+        isReminding: reminders.length > 0,
+      };
     });
   },
 
-  async get(roomId: string) {
+  // Room detail. All speakers (few), listeners capped at 30 + exact listenerCount for the "+229" chip.
+  async get(userId: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
       select: {
         ...ROOM_SELECT,
         participants: {
-          where: { leftAt: null },
+          where: { leftAt: null, role: { in: ['HOST', 'SPEAKER'] } },
           select: PARTICIPANT_SELECT,
           orderBy: { joinedAt: 'asc' },
         },
+        reminders: { where: { userId }, select: { id: true } },
       },
     });
     if (!room) throw NotFound('Room not found');
-    return room;
+
+    const [listeners, listenerCount] = await Promise.all([
+      prisma.audioRoomParticipant.findMany({
+        where: { roomId, leftAt: null, role: 'LISTENER' },
+        select: PARTICIPANT_SELECT,
+        orderBy: { joinedAt: 'asc' },
+        take: 30,
+      }),
+      prisma.audioRoomParticipant.count({ where: { roomId, leftAt: null, role: 'LISTENER' } }),
+    ]);
+
+    const { participants, reminders, ...rest } = room;
+    return {
+      ...rest,
+      speakers: participants,
+      listeners,
+      listenerCount,
+      isReminding: reminders.length > 0,
+    };
+  },
+
+  // "Remind Me" on a scheduled room — notified when the host actually starts it.
+  async remind(userId: string, roomId: string) {
+    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { status: true } });
+    if (!room) throw NotFound('Room not found');
+    if (room.status !== 'SCHEDULED') throw BadRequest('Reminders are only for scheduled rooms');
+    await prisma.audioRoomReminder.upsert({
+      where: { roomId_userId: { roomId, userId } },
+      create: { roomId, userId },
+      update: {},
+    });
+    return { ok: true, isReminding: true };
+  },
+
+  async unremind(userId: string, roomId: string) {
+    await prisma.audioRoomReminder.deleteMany({ where: { roomId, userId } });
+    return { ok: true, isReminding: false };
   },
 
   async start(userId: string, role: string, roomId: string) {
@@ -316,29 +392,31 @@ export const audioRoomService = {
   },
 
   async notifyRoomStarted(roomId: string, title: string, branchId: string | null, clusterId: string | null, hostId: string) {
-    if (!branchId && !clusterId) return;
+    const userIds = new Set<string>();
 
-    const channelWhere: Record<string, unknown> = {};
-    if (branchId) channelWhere.branchId = branchId;
-    if (clusterId) channelWhere.clusterId = clusterId;
+    // Everyone who tapped "Remind Me" gets notified, regardless of channel membership.
+    const reminders = await prisma.audioRoomReminder.findMany({ where: { roomId }, select: { userId: true } });
+    for (const r of reminders) userIds.add(r.userId);
 
-    const channels = await prisma.channel.findMany({
-      where: channelWhere,
-      select: { id: true },
-      take: 1,
-    });
-    if (!channels.length) return;
+    if (branchId || clusterId) {
+      const channelWhere: Record<string, unknown> = {};
+      if (branchId) channelWhere.branchId = branchId;
+      if (clusterId) channelWhere.clusterId = clusterId;
+      const channel = await prisma.channel.findFirst({ where: channelWhere, select: { id: true } });
+      if (channel) {
+        const members = await prisma.channelMembership.findMany({
+          where: { channelId: channel.id, mutedAt: null },
+          select: { userId: true },
+        });
+        for (const m of members) userIds.add(m.userId);
+      }
+    }
 
-    const members = await prisma.channelMembership.findMany({
-      where: { channelId: channels[0]!.id, userId: { not: hostId }, mutedAt: null },
-      select: { userId: true },
-    });
-    if (!members.length) return;
-
-    await notificationQueue.add('audio-room-started', {
-      roomId,
-      title,
-      userIds: members.map((m) => m.userId),
-    });
+    userIds.delete(hostId);
+    if (userIds.size) {
+      await notificationQueue.add('audio-room-started', { roomId, title, userIds: [...userIds] });
+    }
+    // Reminders are one-shot — clear them once fired.
+    if (reminders.length) await prisma.audioRoomReminder.deleteMany({ where: { roomId } });
   },
 };

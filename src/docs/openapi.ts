@@ -793,19 +793,37 @@ registry.registerPath({
   method: 'get',
   path: '/api/v1/audio-rooms',
   tags: ['audio-rooms'],
-  summary: 'List audio rooms — filter by ?filter=live|scheduled|ended, ?branchId, ?clusterId',
+  summary: 'List audio rooms — ?filter=live|scheduled|ended. Each card: host {id,displayName,avatarUrl}, speakerCount, listenerCount, participantsPreview (first 8 avatars), isReminding.',
   security: bearer,
   request: { query: z.object({ filter: z.enum(['live', 'scheduled', 'ended']).optional(), branchId: z.string().optional(), clusterId: z.string().optional() }) },
-  responses: { 200: { description: 'Rooms with listener count', ...json(z.array(z.object({}).passthrough())) } },
+  responses: { 200: { description: 'Room cards for the Audio tab', ...json(z.array(z.object({}).passthrough())) } },
 });
 registry.registerPath({
   method: 'get',
   path: '/api/v1/audio-rooms/{roomId}',
   tags: ['audio-rooms'],
-  summary: 'Get room detail with current participants',
+  summary: 'Room detail — speakers (all), listeners (first 30), listenerCount for the "+N" chip, isReminding',
   security: bearer,
   request: { params: z.object({ roomId: z.string() }) },
-  responses: { 200: { description: 'Room + participants', ...json(z.object({}).passthrough()) } },
+  responses: { 200: { description: 'Room + speakers + capped listeners', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/audio-rooms/{roomId}/remind',
+  tags: ['audio-rooms'],
+  summary: '"Remind Me" on a scheduled room — user is notified when the host starts it',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Reminder set', ...json(z.object({ ok: z.boolean(), isReminding: z.boolean() })) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/audio-rooms/{roomId}/remind',
+  tags: ['audio-rooms'],
+  summary: 'Cancel "Remind Me" on a scheduled room',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Reminder cleared', ...json(z.object({ ok: z.boolean(), isReminding: z.boolean() })) } },
 });
 registry.registerPath({
   method: 'patch',

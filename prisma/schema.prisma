@@ -204,6 +204,7 @@ model User {
   certificates          Certificate[]
   eventRsvps            EventRSVP[]
   audioParticipations   AudioRoomParticipant[]
+  audioRoomReminders    AudioRoomReminder[]
   notifications         Notification[]
   pollVotes             PollVote[]
   reportsFiled          Report[]
@@ -619,8 +620,23 @@ model AudioRoom {
   createdAt      DateTime        @default(now())
 
   participants AudioRoomParticipant[]
+  reminders    AudioRoomReminder[]
 
   @@index([status])
+}
+
+// "Remind Me" on a scheduled room — one row per user per room; fired + cleared when the room goes live.
+model AudioRoomReminder {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  room AudioRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([userId])
 }
 
 model AudioRoomParticipant {
