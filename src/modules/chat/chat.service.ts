@@ -135,9 +135,9 @@ export const chatService = {
     if (channel.type === 'DM') {
       const other = await prisma.channelMembership.findFirst({
         where: { channelId, userId: { not: userId } },
-        select: { userId: true },
+        select: { userId: true, mutedAt: true },
       });
-      if (other) {
+      if (other && !other.mutedAt) {
         await notificationService.notify(other.userId, {
           type: 'MESSAGE',
           title: message.sender.displayName ?? 'New message',
@@ -152,7 +152,7 @@ export const chatService = {
       const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
       if (targets.length) {
         const members = await prisma.channelMembership.findMany({
-          where: { channelId, userId: { in: targets } },
+          where: { channelId, userId: { in: targets }, mutedAt: null },
           select: { userId: true },
         });
         for (const m of members) {
