@@ -63,7 +63,8 @@ export const audioRoomService = {
     if (room.status === 'LIVE') {
       await this.notifyRoomStarted(room.id, room.title, room.branchId, room.clusterId, userId);
     }
-    return room;
+    // Host publishes audio from the moment the room is live — hand them the token in the same response.
+    return { ...room, agora: room.status === 'LIVE' ? this.issueToken(room.id, userId, 'host') : null };
   },
 
   async update(userId: string, role: string, roomId: string, dto: UpdateRoomInput) {
@@ -207,7 +208,7 @@ export const audioRoomService = {
     });
 
     await this.notifyRoomStarted(roomId, room.title, room.branchId, room.clusterId, userId);
-    return updated;
+    return { ...updated, agora: this.issueToken(roomId, userId, 'host') };
   },
 
   async end(userId: string, role: string, roomId: string) {

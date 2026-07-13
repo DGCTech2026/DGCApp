@@ -784,10 +784,10 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/audio-rooms',
   tags: ['audio-rooms'],
-  summary: 'Create an audio room (admin only). Starts live immediately unless scheduledFor is set.',
+  summary: 'Create an audio room (admin only). Starts live immediately unless scheduledFor is set. Live rooms include `agora` credentials for the host — no extra token call needed.',
   security: bearer,
   request: { body: json(createRoomSchema) },
-  responses: { 201: { description: 'Created room + participants', ...json(z.object({}).passthrough()) } },
+  responses: { 201: { description: 'Created room + participants + agora token (when live)', ...json(z.object({}).passthrough()) } },
 });
 registry.registerPath({
   method: 'get',
@@ -838,10 +838,10 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/audio-rooms/{roomId}/start',
   tags: ['audio-rooms'],
-  summary: 'Start a scheduled room (SCHEDULED → LIVE). Host only.',
+  summary: 'Start a scheduled room (SCHEDULED → LIVE). Host only. Response includes `agora` credentials for the host.',
   security: bearer,
   request: { params: z.object({ roomId: z.string() }) },
-  responses: { 200: { description: 'Room now live', ...json(z.object({}).passthrough()) } },
+  responses: { 200: { description: 'Room now live + agora token', ...json(z.object({}).passthrough()) } },
 });
 registry.registerPath({
   method: 'post',
