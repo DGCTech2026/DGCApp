@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
+import { getBulkPresence } from '../chat/chat.socket';
 
 const CHANNEL_SELECT = {
   id: true,
@@ -67,21 +68,25 @@ export const channelService = {
       : [];
     const peerMap = new Map(peers.map((p) => [p.channelId, p.user]));
 
+    // Bulk-fetch presence for all DM peers
+    const peerIds = peers.map((p) => p.user.id);
+    const peerPresence = await getBulkPresence(peerIds);
+
     const items = memberships.map((m) => {
       const ch = m.channel;
       const peer = peerMap.get(ch.id) ?? null;
       return {
         id: ch.id,
         type: ch.type,
-        branchId: ch.branchId, // null unless a branch channel — lets the app map channel ↔ branch
-        clusterId: ch.clusterId, // null unless a cluster channel — lets the app map channel ↔ cluster
+        branchId: ch.branchId,
+        clusterId: ch.clusterId,
         name: ch.name ?? ch.branch?.name ?? ch.cluster?.name ?? peer?.displayName ?? null,
         isReadOnly: ch.isReadOnly,
         role: m.role,
         lastReadAt: m.lastReadAt,
         unreadCount: unreadMap.get(ch.id) ?? 0,
         lastMessage: lastMap.get(ch.id) ?? null,
-        peer,
+        peer: peer ? { ...peer, status: peerPresence[peer.id] ?? 'offline' } : null,
       };
     });
     items.sort(
@@ -140,6 +145,8 @@ export const channelService = {
         select: { role: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
       }),
     ]);
-    return { memberCount, members: rows.map((r) => ({ ...r.user, role: r.role })) };
+    const members = rows.map((r) => ({ ...r.user, role: r.role }));
+    const presence = await getBulkPresence(members.map((m) => m.id));
+    return { memberCount, members: members.map((m) => ({ ...m, status: presence[m.id] })) };
   },
 };

@@ -8,6 +8,10 @@ export function setIo(server: Server) {
   io = server;
 }
 
+export function getIo(): Server | null {
+  return io;
+}
+
 export function emitToChannel(channelId: string, event: string, data: unknown) {
   io?.to(`channel:${channelId}`).emit(event, data);
 }
