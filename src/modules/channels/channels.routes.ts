@@ -14,6 +14,10 @@ channelsRouter.post('/dm', authenticate, validate(openDmSchema), asyncHandler(ch
 channelsRouter.get('/:channelId', authenticate, asyncHandler(channelController.get));
 channelsRouter.post('/:channelId/read', authenticate, asyncHandler(channelController.markRead));
 channelsRouter.get('/:channelId/members', authenticate, asyncHandler(channelController.members));
+channelsRouter.post('/:channelId/mute', authenticate, asyncHandler(channelController.mute));
+channelsRouter.delete('/:channelId/mute', authenticate, asyncHandler(channelController.unmute));
+channelsRouter.get('/:channelId/messages/pinned', authenticate, asyncHandler(channelController.pinnedMessages));
+channelsRouter.get('/:channelId/media', authenticate, asyncHandler(channelController.sharedMedia));
 channelsRouter.get('/:channelId/messages/search', authenticate, asyncHandler(chatController.search));
 channelsRouter.get('/:channelId/messages', authenticate, asyncHandler(chatController.list));
 channelsRouter.post(

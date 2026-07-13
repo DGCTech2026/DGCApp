@@ -315,8 +315,9 @@ model ClusterMembership {
 model Channel {
   id         String      @id @default(cuid())
   type       ChannelType
-  name       String? // null for DMs
-  isReadOnly Boolean     @default(false)
+  name        String? // null for DMs
+  description String?
+  isReadOnly  Boolean     @default(false)
   branchId   String?
   clusterId  String?
   createdAt  DateTime    @default(now())
@@ -338,6 +339,7 @@ model ChannelMembership {
   channelId  String
   role       ChannelRole @default(MEMBER)
   lastReadAt DateTime?
+  mutedAt    DateTime?
   joinedAt   DateTime    @default(now())
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)

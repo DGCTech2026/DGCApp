@@ -1,6 +1,7 @@
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Conflict } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
+import { getUserPresence } from '../chat/chat.socket';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -111,6 +112,33 @@ export const userService = {
     }
     if (branchId) await onboardToBranch(userId, branchId);
     return this.getMe(userId);
+  },
+
+  async getProfile(viewerId: string, targetId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: targetId, deletedAt: null },
+      select: {
+        id: true, displayName: true, avatarUrl: true, bio: true, occupation: true, createdAt: true,
+      },
+    });
+    if (!user) throw NotFound('User not found');
+
+    const [status, viewerChannels, targetChannels] = await Promise.all([
+      getUserPresence(targetId),
+      prisma.channelMembership.findMany({ where: { userId: viewerId }, select: { channelId: true } }),
+      prisma.channelMembership.findMany({ where: { userId: targetId }, select: { channelId: true } }),
+    ]);
+    const viewerSet = new Set(viewerChannels.map((c) => c.channelId));
+    const sharedIds = targetChannels.filter((c) => viewerSet.has(c.channelId)).map((c) => c.channelId);
+    const sharedChannels = sharedIds.length
+      ? await prisma.channel.findMany({
+          where: { id: { in: sharedIds }, type: { not: 'DM' } },
+          select: { id: true, type: true, name: true },
+          take: 20,
+        })
+      : [];
+
+    return { ...user, status, sharedChannels };
   },
 
   // Self-delete (hard purge) — removes the account + its data and frees the email/phone for reuse.

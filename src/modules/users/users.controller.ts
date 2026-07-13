@@ -11,6 +11,10 @@ export const userController = {
     res.json(await userService.updateMe(req.user!.sub, req.body));
   },
 
+  async getProfile(req: Request, res: Response) {
+    res.json(await userService.getProfile(req.user!.sub, req.params.userId as string));
+  },
+
   async deleteMe(req: Request, res: Response) {
     res.json(await userService.deleteMe(req.user!.sub));
   },

@@ -226,7 +226,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/v1/channels/{channelId}',
   tags: ['channels'],
-  summary: 'Get one channel (detail) — must be a member',
+  summary: 'Get channel detail — includes description, memberCount, myRole, isMuted',
   security: bearer,
   request: { params: z.object({ channelId: z.string() }) },
   responses: {
@@ -300,6 +300,54 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ channelId: z.string() }) },
   responses: { 200: { description: 'Members + memberCount', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/channels/{channelId}/mute',
+  tags: ['channels'],
+  summary: 'Mute a channel (suppress notifications)',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: { 200: { description: 'Muted', ...json(z.object({ ok: z.boolean() })) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/channels/{channelId}/mute',
+  tags: ['channels'],
+  summary: 'Unmute a channel',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: { 200: { description: 'Unmuted', ...json(z.object({ ok: z.boolean() })) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/messages/pinned',
+  tags: ['channels'],
+  summary: 'List pinned messages in a channel',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }) },
+  responses: { 200: { description: 'Pinned messages', ...json(z.array(z.object({}).passthrough())) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/media',
+  tags: ['channels'],
+  summary: 'Shared media gallery (images, videos, audio, files) — paginated',
+  security: bearer,
+  request: {
+    params: z.object({ channelId: z.string() }),
+    query: z.object({ cursor: z.string().optional(), limit: z.coerce.number().optional() }),
+  },
+  responses: { 200: { description: 'Media items + nextCursor', ...json(z.object({}).passthrough()) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/users/{userId}',
+  tags: ['users'],
+  summary: 'Public user profile — displayName, avatar, bio, occupation, online status, shared channels',
+  security: bearer,
+  request: { params: z.object({ userId: z.string() }) },
+  responses: { 200: { description: 'User profile', ...json(z.object({}).passthrough()) } },
 });
 registry.registerPath({
   method: 'patch',

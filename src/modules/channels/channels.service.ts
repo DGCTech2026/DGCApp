@@ -7,9 +7,11 @@ const CHANNEL_SELECT = {
   id: true,
   type: true,
   name: true,
+  description: true,
   isReadOnly: true,
   branchId: true,
   clusterId: true,
+  createdAt: true,
 } as const;
 
 export const channelService = {
@@ -96,10 +98,25 @@ export const channelService = {
   },
 
   async get(userId: string, role: string, channelId: string) {
-    await this.requireMember(userId, role, channelId);
-    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: CHANNEL_SELECT });
+    const membership = await this.requireMember(userId, role, channelId);
+    const [channel, memberCount] = await Promise.all([
+      prisma.channel.findUnique({
+        where: { id: channelId },
+        select: {
+          ...CHANNEL_SELECT,
+          branch: { select: { id: true, name: true } },
+          cluster: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.channelMembership.count({ where: { channelId } }),
+    ]);
     if (!channel) throw NotFound('Channel not found');
-    return channel;
+    return {
+      ...channel,
+      memberCount,
+      myRole: membership?.role ?? (role === 'SUPER_ADMIN' ? 'ADMIN' : 'MEMBER'),
+      isMuted: !!membership?.mutedAt,
+    };
   },
 
   async markRead(userId: string, role: string, channelId: string) {
@@ -135,7 +152,11 @@ export const channelService = {
   // Channel members (PRD §7 "who's in this group"). Capped page for now — add cursor paging when a
   // branch channel gets large.
   async members(userId: string, role: string, channelId: string, limit = 50) {
-    await this.requireMember(userId, role, channelId);
+    const membership = await this.requireMember(userId, role, channelId);
+    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { isReadOnly: true } });
+    if (channel?.isReadOnly && role !== 'SUPER_ADMIN' && membership?.role === 'MEMBER') {
+      throw Forbidden('Only admins can view members in view-only channels');
+    }
     const [memberCount, rows] = await Promise.all([
       prisma.channelMembership.count({ where: { channelId } }),
       prisma.channelMembership.findMany({
@@ -148,5 +169,58 @@ export const channelService = {
     const members = rows.map((r) => ({ ...r.user, role: r.role }));
     const presence = await getBulkPresence(members.map((m) => m.id));
     return { memberCount, members: members.map((m) => ({ ...m, status: presence[m.id] })) };
+  },
+
+  async mute(userId: string, channelId: string) {
+    await prisma.channelMembership.update({
+      where: { userId_channelId: { userId, channelId } },
+      data: { mutedAt: new Date() },
+    });
+    return { ok: true };
+  },
+
+  async unmute(userId: string, channelId: string) {
+    await prisma.channelMembership.update({
+      where: { userId_channelId: { userId, channelId } },
+      data: { mutedAt: null },
+    });
+    return { ok: true };
+  },
+
+  async pinnedMessages(userId: string, role: string, channelId: string) {
+    await this.requireMember(userId, role, channelId);
+    return prisma.message.findMany({
+      where: { channelId, pinnedAt: { not: null }, deletedAt: null },
+      orderBy: { pinnedAt: 'desc' },
+      select: {
+        id: true, type: true, body: true, mediaUrl: true, pinnedAt: true, createdAt: true,
+        sender: { select: { id: true, displayName: true, avatarUrl: true } },
+      },
+    });
+  },
+
+  async sharedMedia(userId: string, role: string, channelId: string, cursor?: string, limit = 30) {
+    await this.requireMember(userId, role, channelId);
+    const where: Record<string, unknown> = {
+      channelId,
+      type: { in: ['IMAGE', 'VIDEO', 'AUDIO', 'FILE'] },
+      deletedAt: null,
+    };
+    if (cursor) {
+      where.createdAt = { lt: new Date(cursor) };
+    }
+    const items = await prisma.message.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(limit, 50),
+      select: {
+        id: true, type: true, mediaUrl: true, body: true, createdAt: true,
+        sender: { select: { id: true, displayName: true } },
+      },
+    });
+    return {
+      items,
+      nextCursor: items.length === limit ? items[items.length - 1]!.createdAt.toISOString() : null,
+    };
   },
 };
