@@ -1,6 +1,7 @@
 import { prisma } from '../../infra/db';
 import { channelService } from '../channels/channels.service';
 import { notificationService } from '../notifications/notifications.service';
+import { notificationQueue } from '../../infra/queue';
 import { emitToChannel } from '../../infra/realtime';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
@@ -130,8 +131,6 @@ export const chatService = {
     });
     emitToChannel(channelId, 'message:new', message);
 
-    // DM = one recipient → safe to notify inline. Group/channel fan-out (many recipients) must go
-    // through the BullMQ notification worker instead — never loop-notify a whole channel here.
     if (channel.type === 'DM') {
       const other = await prisma.channelMembership.findFirst({
         where: { channelId, userId: { not: userId } },
@@ -145,6 +144,14 @@ export const chatService = {
           data: { channelId, messageId: message.id },
         });
       }
+    } else {
+      await notificationQueue.add('message-fanout', {
+        channelId,
+        messageId: message.id,
+        senderId: userId,
+        senderName: message.sender.displayName ?? 'Someone',
+        body: message.body,
+      });
     }
 
     // @mentions — notify the tagged users who are members of this channel (PRD §7).

@@ -29,7 +29,7 @@ export const notificationWorker = new Worker(
         excludeUserId?: string;
       };
       const members = await prisma.channelMembership.findMany({
-        where: { channelId, ...(excludeUserId ? { userId: { not: excludeUserId } } : {}) },
+        where: { channelId, mutedAt: null, ...(excludeUserId ? { userId: { not: excludeUserId } } : {}) },
         select: { userId: true },
       });
       let created = 0;
@@ -49,7 +49,44 @@ export const notificationWorker = new Worker(
       return;
     }
 
-    // TODO: FCM push delivery (firebase-admin) for the other notification types.
+    // Group/channel message fan-out: notifies every non-muted member except the sender.
+    // Batched DB inserts + batched FCM push. Runs off the request path so sending stays fast.
+    if (job.name === 'message-fanout') {
+      const { channelId, messageId, senderId, senderName, body } = job.data as {
+        channelId: string;
+        messageId: string;
+        senderId: string;
+        senderName: string;
+        body: string | null;
+      };
+      const members = await prisma.channelMembership.findMany({
+        where: { channelId, userId: { not: senderId }, mutedAt: null },
+        select: { userId: true },
+      });
+      if (!members.length) return;
+
+      let created = 0;
+      const title = senderName || 'New message';
+      const notifBody = body || 'Sent a message';
+      for (let i = 0; i < members.length; i += BATCH) {
+        const chunk = members.slice(i, i + BATCH).map((m) => ({
+          userId: m.userId,
+          type: 'MESSAGE' as const,
+          title,
+          body: notifBody,
+          data: { channelId, messageId },
+        }));
+        const res = await prisma.notification.createMany({ data: chunk });
+        created += res.count;
+      }
+      await pushService.sendToUsers(
+        members.map((m) => m.userId),
+        { title, body: notifBody, data: { channelId, messageId } },
+      );
+      logger.info({ jobId: job.id, channelId, created }, 'Message fan-out complete');
+      return;
+    }
+
     logger.info({ jobId: job.id, name: job.name }, 'Notification job received (no handler)');
   },
   { connection },
