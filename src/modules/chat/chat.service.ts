@@ -1,6 +1,5 @@
 import { prisma } from '../../infra/db';
 import { channelService } from '../channels/channels.service';
-import { notificationService } from '../notifications/notifications.service';
 import { notificationQueue } from '../../infra/queue';
 import { emitToChannel } from '../../infra/realtime';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
@@ -71,12 +70,13 @@ export const chatService = {
     } else if (!dto.body && !dto.mediaUrl) {
       throw BadRequest('A message needs a body or mediaUrl');
     }
-    const membership = await channelService.requireMember(userId, role, channelId);
-
-    const channel = await prisma.channel.findUnique({
-      where: { id: channelId },
-      select: { isReadOnly: true, type: true },
-    });
+    const [membership, channel] = await Promise.all([
+      channelService.requireMember(userId, role, channelId),
+      prisma.channel.findUnique({
+        where: { id: channelId },
+        select: { isReadOnly: true, type: true },
+      }),
+    ]);
     if (!channel) throw NotFound('Channel not found');
     if (channel.isReadOnly && !isModerator(role, membership?.role)) {
       throw Forbidden('This channel is read-only');
@@ -131,19 +131,16 @@ export const chatService = {
     });
     emitToChannel(channelId, 'message:new', message);
 
+    // All recipient-side work (peer lookup, notification rows, FCM) happens in the notification
+    // worker — the sender's request only pays for one Redis enqueue per job.
     if (channel.type === 'DM') {
-      const other = await prisma.channelMembership.findFirst({
-        where: { channelId, userId: { not: userId } },
-        select: { userId: true, mutedAt: true },
+      await notificationQueue.add('dm-notify', {
+        channelId,
+        messageId: message.id,
+        senderId: userId,
+        senderName: message.sender.displayName ?? 'New message',
+        body: message.body,
       });
-      if (other && !other.mutedAt) {
-        await notificationService.notify(other.userId, {
-          type: 'MESSAGE',
-          title: message.sender.displayName ?? 'New message',
-          body: message.body ?? 'Sent you a message',
-          data: { channelId, messageId: message.id },
-        });
-      }
     } else {
       await notificationQueue.add('message-fanout', {
         channelId,
@@ -158,18 +155,13 @@ export const chatService = {
     if (dto.mentions?.length) {
       const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
       if (targets.length) {
-        const members = await prisma.channelMembership.findMany({
-          where: { channelId, userId: { in: targets }, mutedAt: null },
-          select: { userId: true },
+        await notificationQueue.add('mention-fanout', {
+          channelId,
+          messageId: message.id,
+          senderName: message.sender.displayName ?? 'Someone',
+          body: message.body,
+          targets,
         });
-        for (const m of members) {
-          await notificationService.notify(m.userId, {
-            type: 'MENTION',
-            title: `${message.sender.displayName ?? 'Someone'} mentioned you`,
-            body: message.body ?? '',
-            data: { channelId, messageId: message.id },
-          });
-        }
       }
     }
     return message;
@@ -178,25 +170,27 @@ export const chatService = {
   async list(userId: string, role: string, channelId: string, opts: ListMessagesInput) {
     await channelService.requireMember(userId, role, channelId);
     const c = opts.cursor ? decodeCursor(opts.cursor) : null;
-    const rows = await prisma.message.findMany({
-      where: {
-        channelId,
-        deletedAt: null,
-        ...(c
-          ? { OR: [{ createdAt: { lt: c.createdAt } }, { createdAt: c.createdAt, id: { lt: c.id } }] }
-          : {}),
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: opts.limit + 1,
-      select: MESSAGE_SELECT,
-    });
+    const [rows, channel] = await Promise.all([
+      prisma.message.findMany({
+        where: {
+          channelId,
+          deletedAt: null,
+          ...(c
+            ? { OR: [{ createdAt: { lt: c.createdAt } }, { createdAt: c.createdAt, id: { lt: c.id } }] }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: opts.limit + 1,
+        select: MESSAGE_SELECT,
+      }),
+      prisma.channel.findUnique({ where: { id: channelId }, select: { type: true } }),
+    ]);
     const hasMore = rows.length > opts.limit;
     const messages = rows.slice(0, opts.limit);
     const last = messages[messages.length - 1];
 
     // Read receipts (DM ticks): the peer's lastReadAt tells the client which of my messages they've
     // read. For groups this is null (read state there is per-member, surfaced as unread counts).
-    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { type: true } });
     let peerLastReadAt: Date | null = null;
     if (channel?.type === 'DM') {
       const peer = await prisma.channelMembership.findFirst({

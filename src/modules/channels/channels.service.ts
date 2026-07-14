@@ -123,8 +123,9 @@ export const channelService = {
     };
   },
 
-  async markRead(userId: string, role: string, channelId: string) {
-    await this.requireMember(userId, role, channelId);
+  async markRead(userId: string, _role: string, channelId: string) {
+    // No membership pre-check: the update is scoped to (userId, channelId), so a non-member
+    // is a harmless zero-row no-op — same semantics as the socket handler, half the queries.
     await prisma.channelMembership.updateMany({
       where: { userId, channelId },
       data: { lastReadAt: new Date() },

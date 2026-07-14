@@ -4,6 +4,7 @@ import { prisma } from '../../infra/db';
 import { logger } from '../../infra/logger';
 import { eventService } from '../../modules/events/events.service';
 import { audioRoomService } from '../../modules/audio-rooms/audio-rooms.service';
+import { notificationService } from '../../modules/notifications/notifications.service';
 import { pushService } from '../../modules/push/push.service';
 
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
@@ -57,8 +58,10 @@ export const notificationWorker = new Worker(
       return;
     }
 
-    // Group/channel message fan-out: notifies every non-muted member except the sender.
-    // Batched DB inserts + batched FCM push. Runs off the request path so sending stays fast.
+    // Group/channel message fan-out: FCM push ONLY to non-muted members — no Notification rows.
+    // Persisting a row per member per group message would grow the table by thousands of rows a
+    // day for one busy channel; in-app notification entries are reserved for DMs, mentions,
+    // announcements, and events (WhatsApp semantics).
     if (job.name === 'message-fanout') {
       const { channelId, messageId, senderId, senderName, body } = job.data as {
         channelId: string;
@@ -72,26 +75,58 @@ export const notificationWorker = new Worker(
         select: { userId: true },
       });
       if (!members.length) return;
-
-      let created = 0;
-      const title = senderName || 'New message';
-      const notifBody = body || 'Sent a message';
-      for (let i = 0; i < members.length; i += BATCH) {
-        const chunk = members.slice(i, i + BATCH).map((m) => ({
-          userId: m.userId,
-          type: 'MESSAGE' as const,
-          title,
-          body: notifBody,
-          data: { channelId, messageId },
-        }));
-        const res = await prisma.notification.createMany({ data: chunk });
-        created += res.count;
-      }
       await pushService.sendToUsers(
         members.map((m) => m.userId),
-        { title, body: notifBody, data: { channelId, messageId } },
+        { title: senderName || 'New message', body: body || 'Sent a message', data: { channelId, messageId } },
       );
-      logger.info({ jobId: job.id, channelId, created }, 'Message fan-out complete');
+      return;
+    }
+
+    // DM notification — the recipient lookup, mute check, row insert, socket emit and push all
+    // happen here instead of inside the sender's request.
+    if (job.name === 'dm-notify') {
+      const { channelId, messageId, senderId, senderName, body } = job.data as {
+        channelId: string;
+        messageId: string;
+        senderId: string;
+        senderName: string;
+        body: string | null;
+      };
+      const other = await prisma.channelMembership.findFirst({
+        where: { channelId, userId: { not: senderId } },
+        select: { userId: true, mutedAt: true },
+      });
+      if (!other || other.mutedAt) return;
+      await notificationService.notify(other.userId, {
+        type: 'MESSAGE',
+        title: senderName,
+        body: body ?? 'Sent you a message',
+        data: { channelId, messageId },
+      });
+      return;
+    }
+
+    // @mention notifications — filters targets to actual non-muted channel members.
+    if (job.name === 'mention-fanout') {
+      const { channelId, messageId, senderName, body, targets } = job.data as {
+        channelId: string;
+        messageId: string;
+        senderName: string;
+        body: string | null;
+        targets: string[];
+      };
+      const members = await prisma.channelMembership.findMany({
+        where: { channelId, userId: { in: targets }, mutedAt: null },
+        select: { userId: true },
+      });
+      for (const m of members) {
+        await notificationService.notify(m.userId, {
+          type: 'MENTION',
+          title: `${senderName} mentioned you`,
+          body: body ?? '',
+          data: { channelId, messageId },
+        });
+      }
       return;
     }
 
@@ -117,6 +152,29 @@ export const notificationWorker = new Worker(
         data: { roomId },
       });
       logger.info({ jobId: job.id, roomId, notified: userIds.length }, 'Audio room start notification complete');
+      return;
+    }
+
+    // Daily janitor — keeps hot tables lean. Everything deleted here is already invisible to users.
+    if (job.name === 'janitor-scan') {
+      const now = new Date();
+      const days = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000);
+      const [otps, readNotifs, oldNotifs, reminders] = await Promise.all([
+        prisma.otp.deleteMany({ where: { expiresAt: { lt: now } } }),
+        prisma.notification.deleteMany({ where: { readAt: { not: null, lt: days(30) } } }),
+        prisma.notification.deleteMany({ where: { createdAt: { lt: days(90) } } }),
+        prisma.audioRoomReminder.deleteMany({ where: { room: { status: 'ENDED' } } }),
+      ]);
+      logger.info(
+        {
+          jobId: job.id,
+          expiredOtps: otps.count,
+          readNotifications: readNotifs.count,
+          oldNotifications: oldNotifs.count,
+          staleReminders: reminders.count,
+        },
+        'Janitor scan complete',
+      );
       return;
     }
 

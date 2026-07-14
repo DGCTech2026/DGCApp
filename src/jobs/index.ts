@@ -17,5 +17,10 @@ export function startWorkers() {
     .upsertJobScheduler('audio-room-reminders', { every: 5 * 60 * 1000 }, { name: 'audio-room-reminders-scan' })
     .then(() => logger.info('Audio-room-reminder scheduler registered'))
     .catch((err) => logger.error({ err }, 'Failed to register audio-room reminder scheduler'));
+  // Daily janitor: wipes expired OTPs, aged notifications, and stale reminders.
+  notificationQueue
+    .upsertJobScheduler('janitor', { every: 24 * 60 * 60 * 1000 }, { name: 'janitor-scan' })
+    .then(() => logger.info('Janitor scheduler registered'))
+    .catch((err) => logger.error({ err }, 'Failed to register janitor scheduler'));
   logger.info('Workers started (in-process)');
 }

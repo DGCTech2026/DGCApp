@@ -1,6 +1,6 @@
 import { prisma } from '../../infra/db';
 import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
-import { emitToUser } from '../../infra/realtime';
+import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
@@ -62,6 +62,7 @@ export const audioRoomService = {
     });
 
     if (room.status === 'LIVE') {
+      joinAudioRoom(userId, room.id); // host's sockets follow room events from second one
       await this.notifyRoomStarted(room.id, room.title, room.branchId, room.clusterId, userId);
     }
     // Host publishes audio from the moment the room is live — hand them the token in the same response.
@@ -208,6 +209,7 @@ export const audioRoomService = {
       select: { ...ROOM_SELECT, participants: { where: { leftAt: null }, select: PARTICIPANT_SELECT } },
     });
 
+    joinAudioRoom(userId, roomId);
     await this.notifyRoomStarted(roomId, room.title, room.branchId, room.clusterId, userId);
     return { ...updated, agora: this.issueToken(roomId, userId, 'host') };
   },
@@ -215,7 +217,7 @@ export const audioRoomService = {
   async end(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, participants: { where: { leftAt: null }, select: { userId: true } } },
+      select: { hostId: true, status: true },
     });
     if (!room) throw NotFound('Room not found');
     if (room.hostId !== userId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can end this room');
@@ -231,9 +233,8 @@ export const audioRoomService = {
       data: { leftAt: new Date() },
     });
 
-    for (const p of room.participants) {
-      emitToUser(p.userId, 'audio-room:ended', { roomId });
-    }
+    emitToAudioRoom(roomId, 'audio-room:ended', { roomId });
+    closeAudioRoom(roomId);
     return updated;
   },
 
@@ -252,7 +253,8 @@ export const audioRoomService = {
       select: PARTICIPANT_SELECT,
     });
 
-    this.emitToRoom(roomId, 'audio-room:user-joined', participant);
+    emitToAudioRoom(roomId, 'audio-room:user-joined', participant);
+    joinAudioRoom(userId, roomId); // after the emit — the joiner doesn't need their own join event
 
     const token = this.issueToken(roomId, userId, 'audience');
     return { participant, agora: token };
@@ -270,7 +272,8 @@ export const audioRoomService = {
       data: { leftAt: new Date() },
     });
 
-    this.emitToRoom(roomId, 'audio-room:user-left', { roomId, userId });
+    leaveAudioRoom(userId, roomId);
+    emitToAudioRoom(roomId, 'audio-room:user-left', { roomId, userId });
 
     if (p.role === 'HOST') {
       const nextSpeaker = await prisma.audioRoomParticipant.findFirst({
@@ -283,7 +286,7 @@ export const audioRoomService = {
           data: { role: 'HOST' },
         });
         await prisma.audioRoom.update({ where: { id: roomId }, data: { hostId: nextSpeaker.userId } });
-        this.emitToRoom(roomId, 'audio-room:role-changed', {
+        emitToAudioRoom(roomId, 'audio-room:role-changed', {
           roomId, userId: nextSpeaker.userId, role: 'HOST',
         });
       } else {
@@ -295,7 +298,8 @@ export const audioRoomService = {
           where: { roomId, leftAt: null },
           data: { leftAt: new Date() },
         });
-        this.emitToRoom(roomId, 'audio-room:ended', { roomId });
+        emitToAudioRoom(roomId, 'audio-room:ended', { roomId });
+        closeAudioRoom(roomId);
       }
     }
     return { ok: true };
@@ -309,11 +313,7 @@ export const audioRoomService = {
     if (!p) throw BadRequest('Not in this room');
     if (p.role !== 'LISTENER') throw BadRequest('Only listeners can raise hand');
 
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true } });
-    if (room) {
-      emitToUser(room.hostId, 'audio-room:hand-raised', { roomId, userId });
-    }
-    this.emitToRoom(roomId, 'audio-room:hand-raised', { roomId, userId });
+    emitToAudioRoom(roomId, 'audio-room:hand-raised', { roomId, userId });
     return { ok: true };
   },
 
@@ -334,7 +334,7 @@ export const audioRoomService = {
       data: { role: targetRole },
     });
 
-    this.emitToRoom(roomId, 'audio-room:role-changed', {
+    emitToAudioRoom(roomId, 'audio-room:role-changed', {
       roomId, userId: targetUserId, role: targetRole,
     });
 
@@ -359,7 +359,8 @@ export const audioRoomService = {
 
     await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { leftAt: new Date() } });
     emitToUser(targetUserId, 'audio-room:kicked', { roomId });
-    this.emitToRoom(roomId, 'audio-room:user-left', { roomId, userId: targetUserId });
+    leaveAudioRoom(targetUserId, roomId);
+    emitToAudioRoom(roomId, 'audio-room:user-left', { roomId, userId: targetUserId });
     return { ok: true };
   },
 
@@ -381,16 +382,6 @@ export const audioRoomService = {
     const uid = stableUid(userId);
     const token = buildRtcToken(roomId, uid, agoraRole);
     return { appId: env.AGORA_APP_ID!, token, channel: roomId, uid };
-  },
-
-  async emitToRoom(roomId: string, event: string, data: unknown) {
-    const participants = await prisma.audioRoomParticipant.findMany({
-      where: { roomId, leftAt: null },
-      select: { userId: true },
-    });
-    for (const p of participants) {
-      emitToUser(p.userId, event, data);
-    }
   },
 
   async notifyRoomStarted(roomId: string, title: string, branchId: string | null, clusterId: string | null, hostId: string) {

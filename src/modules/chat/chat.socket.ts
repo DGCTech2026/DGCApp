@@ -39,30 +39,48 @@ export function registerSocketHandlers(io: Server) {
     }
   });
 
+  // Refresh the presence TTL and report whether the visible status changed. Callers broadcast
+  // only on change — re-broadcasting every heartbeat is an O(users²) storm for zero information.
+  async function setPresence(userId: string, status: PresenceStatus): Promise<boolean> {
+    const results = await redis
+      .pipeline()
+      .get(PRESENCE_KEY(userId))
+      .set(PRESENCE_KEY(userId), status, 'EX', PRESENCE_TTL)
+      .exec();
+    const previous = (results?.[0]?.[1] as string | null) ?? 'offline';
+    return previous !== status;
+  }
+
   io.on('connection', async (socket: Socket) => {
     const userId = socket.data.user.sub as string;
     socket.join(`user:${userId}`);
 
-    // --- Presence: mark online ---
-    await redis.set(PRESENCE_KEY(userId), 'online', 'EX', PRESENCE_TTL);
-    socket.broadcast.emit('presence', { userId, status: 'online' });
+    // --- Presence: mark online (broadcast only on an actual offline/away → online change) ---
+    if (await setPresence(userId, 'online')) {
+      socket.broadcast.emit('presence', { userId, status: 'online' });
+    }
 
-    // Join channel rooms
+    // Join channel rooms + any live audio rooms the user is still in (reconnect mid-room)
     try {
-      const memberships = await prisma.channelMembership.findMany({
-        where: { userId },
-        select: { channelId: true },
-      });
+      const [memberships, audioRooms] = await Promise.all([
+        prisma.channelMembership.findMany({ where: { userId }, select: { channelId: true } }),
+        prisma.audioRoomParticipant.findMany({
+          where: { userId, leftAt: null, room: { status: 'LIVE' } },
+          select: { roomId: true },
+        }),
+      ]);
       for (const m of memberships) socket.join(`channel:${m.channelId}`);
+      for (const r of audioRooms) socket.join(`audio-room:${r.roomId}`);
     } catch (err) {
       logger.error({ err, userId }, 'Failed to join channel rooms');
     }
 
     // --- Presence heartbeat: frontend sends every 60s to stay online ---
     socket.on('presence:heartbeat', async (payload?: { status?: string }) => {
-      const status = payload?.status === 'away' ? 'away' : 'online';
-      await redis.set(PRESENCE_KEY(userId), status, 'EX', PRESENCE_TTL);
-      socket.broadcast.emit('presence', { userId, status });
+      const status: PresenceStatus = payload?.status === 'away' ? 'away' : 'online';
+      if (await setPresence(userId, status)) {
+        socket.broadcast.emit('presence', { userId, status });
+      }
     });
 
     // --- Typing indicators ---
@@ -119,8 +137,9 @@ export function registerSocketHandlers(io: Server) {
       // Check if user has other active sockets (multi-device)
       const rooms = await io.in(`user:${userId}`).fetchSockets();
       if (rooms.length === 0) {
-        await redis.del(PRESENCE_KEY(userId));
-        socket.broadcast.emit('presence', { userId, status: 'offline' });
+        const deleted = await redis.del(PRESENCE_KEY(userId));
+        // Only announce if they were actually visible as online/away (TTL may have expired already).
+        if (deleted > 0) socket.broadcast.emit('presence', { userId, status: 'offline' });
       }
     });
   });

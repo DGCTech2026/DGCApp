@@ -19,3 +19,24 @@ export function emitToChannel(channelId: string, event: string, data: unknown) {
 export function emitToUser(userId: string, event: string, data: unknown) {
   io?.to(`user:${userId}`).emit(event, data);
 }
+
+// Audio rooms use their own socket rooms so one emit reaches every participant — no
+// per-participant DB query + emit loop. Sockets are joined/left server-side through the
+// user's `user:<id>` room, so the client never has to emit anything to subscribe.
+const audioRoomName = (roomId: string) => `audio-room:${roomId}`;
+
+export function emitToAudioRoom(roomId: string, event: string, data: unknown) {
+  io?.to(audioRoomName(roomId)).emit(event, data);
+}
+
+export function joinAudioRoom(userId: string, roomId: string) {
+  io?.in(`user:${userId}`).socketsJoin(audioRoomName(roomId));
+}
+
+export function leaveAudioRoom(userId: string, roomId: string) {
+  io?.in(`user:${userId}`).socketsLeave(audioRoomName(roomId));
+}
+
+export function closeAudioRoom(roomId: string) {
+  io?.in(audioRoomName(roomId)).socketsLeave(audioRoomName(roomId));
+}

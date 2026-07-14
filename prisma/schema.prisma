@@ -653,6 +653,7 @@ model AudioRoomParticipant {
 
   @@index([roomId])
   @@index([userId])
+  @@index([roomId, leftAt])
 }
 
 model Notification {
@@ -668,6 +669,7 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 // Moderation/reporting is core, not optional (CLAUDE.md §9.1). Anything reportable lands here.
