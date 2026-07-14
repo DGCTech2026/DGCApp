@@ -1,35 +1,39 @@
 import { prisma } from '../../infra/db';
 import { NotFound } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
+import { cached, cacheKeys, invalidate } from '../../infra/cache';
 
 export const clusterService = {
   // Recommended Clusters list — all active clusters, flagged with whether the user has joined.
+  // The catalogue (names + counts) is cached and shared; isMember is merged live per caller.
   async list(userId: string) {
     const [clusters, mine] = await Promise.all([
-      prisma.cluster.findMany({
-        where: { archivedAt: null },
-        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-        select: {
-          id: true,
-          slug: true,
-          name: true,
-          description: true,
-          isDefault: true,
-          _count: { select: { memberships: true } },
-        },
+      cached(cacheKeys.clusters, 60, async () => {
+        const rows = await prisma.cluster.findMany({
+          where: { archivedAt: null },
+          orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            description: true,
+            isDefault: true,
+            _count: { select: { memberships: true } },
+          },
+        });
+        return rows.map((c) => ({
+          id: c.id,
+          slug: c.slug,
+          name: c.name,
+          description: c.description,
+          isDefault: c.isDefault,
+          memberCount: c._count.memberships,
+        }));
       }),
       prisma.clusterMembership.findMany({ where: { userId }, select: { clusterId: true } }),
     ]);
     const mineSet = new Set(mine.map((m) => m.clusterId));
-    return clusters.map((c) => ({
-      id: c.id,
-      slug: c.slug,
-      name: c.name,
-      description: c.description,
-      isDefault: c.isDefault,
-      memberCount: c._count.memberships,
-      isMember: mineSet.has(c.id),
-    }));
+    return clusters.map((c) => ({ ...c, isMember: mineSet.has(c.id) }));
   },
 
   async join(userId: string, clusterId: string) {
@@ -62,6 +66,10 @@ export const clusterService = {
       },
       { timeout: 15000, maxWait: 8000 },
     );
+    await invalidate(
+      cacheKeys.clusters,
+      ...(channel ? [cacheKeys.channelMembers(channel.id), cacheKeys.channelMeta(channel.id)] : []),
+    );
     await growthEngine.enqueueRequirement(userId, 'JOIN_CLUSTER'); // AUTO (New Member, §11)
     return { ok: true };
   },
@@ -77,6 +85,10 @@ export const clusterService = {
         if (channel) await tx.channelMembership.deleteMany({ where: { userId, channelId: channel.id } });
       },
       { timeout: 15000, maxWait: 8000 },
+    );
+    await invalidate(
+      cacheKeys.clusters,
+      ...(channel ? [cacheKeys.channelMembers(channel.id), cacheKeys.channelMeta(channel.id)] : []),
     );
     return { ok: true };
   },

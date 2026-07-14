@@ -2,6 +2,7 @@ import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Conflict } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
 import { getUserPresence } from '../chat/chat.socket';
+import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -49,6 +50,8 @@ export async function onboardToBranch(userId: string, branchId: string) {
     },
     { timeout: 20000, maxWait: 10000 },
   );
+  // The joined channels' cached member lists / counts are now stale.
+  await invalidate(...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]));
   await growthEngine.enqueueRequirement(userId, 'JOIN_BRANCH'); // AUTO (First Timer, §11)
 }
 
@@ -109,19 +112,24 @@ export const userService = {
 
     if (Object.keys(updates).length > 0) {
       await prisma.user.update({ where: { id: userId }, data: updates });
+      await invalidate(cacheKeys.userProfile(userId));
     }
     if (branchId) await onboardToBranch(userId, branchId);
     return this.getMe(userId);
   },
 
   async getProfile(viewerId: string, targetId: string) {
-    const user = await prisma.user.findUnique({
-      where: { id: targetId, deletedAt: null },
-      select: {
-        id: true, displayName: true, avatarUrl: true, bio: true, occupation: true, createdAt: true,
-      },
+    // Profile core is cached (invalidated on PATCH /users/me); presence + shared channels stay live.
+    const user = await cached(cacheKeys.userProfile(targetId), 120, async () => {
+      const row = await prisma.user.findUnique({
+        where: { id: targetId, deletedAt: null },
+        select: {
+          id: true, displayName: true, avatarUrl: true, bio: true, occupation: true, createdAt: true,
+        },
+      });
+      if (!row) throw NotFound('User not found');
+      return row;
     });
-    if (!user) throw NotFound('User not found');
 
     const [status, viewerChannels, targetChannels] = await Promise.all([
       getUserPresence(targetId),
@@ -151,6 +159,7 @@ export const userService = {
       },
       { timeout: 20000, maxWait: 10000 },
     );
+    await invalidate(cacheKeys.userProfile(userId));
     return { ok: true };
   },
 };

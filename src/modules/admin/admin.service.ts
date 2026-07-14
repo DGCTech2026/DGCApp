@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { NotFound } from '../../utils/errors';
+import { cacheKeys, invalidate } from '../../infra/cache';
 import type { CreateBranchInput } from './admin.schema';
 
 const BRANCH_SECTIONS = [
@@ -96,6 +97,7 @@ export const adminService = {
         isReadOnly: name === 'Service Updates', // the branch announcement channel (PRD §3)
       })),
     });
+    await invalidate(cacheKeys.branches);
     return branch;
   },
 
@@ -125,6 +127,7 @@ export const adminService = {
     const c = await prisma.cluster.findUnique({ where: { id: clusterId }, select: { id: true } });
     if (!c) throw NotFound('Cluster not found');
     await prisma.cluster.update({ where: { id: clusterId }, data: { archivedAt: archived ? new Date() : null } });
+    await invalidate(cacheKeys.clusters);
     return { ok: true };
   },
 };

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
 import { getBulkPresence } from '../chat/chat.socket';
+import { cached, cacheKeys } from '../../infra/cache';
 
 const CHANNEL_SELECT = {
   id: true,
@@ -99,21 +100,24 @@ export const channelService = {
 
   async get(userId: string, role: string, channelId: string) {
     const membership = await this.requireMember(userId, role, channelId);
-    const [channel, memberCount] = await Promise.all([
-      prisma.channel.findUnique({
-        where: { id: channelId },
-        select: {
-          ...CHANNEL_SELECT,
-          branch: { select: { id: true, name: true } },
-          cluster: { select: { id: true, name: true } },
-        },
-      }),
-      prisma.channelMembership.count({ where: { channelId } }),
-    ]);
-    if (!channel) throw NotFound('Channel not found');
+    // Shared meta is cached; myRole/isMuted come from the (already fetched) membership row.
+    const meta = await cached(cacheKeys.channelMeta(channelId), 60, async () => {
+      const [channel, memberCount] = await Promise.all([
+        prisma.channel.findUnique({
+          where: { id: channelId },
+          select: {
+            ...CHANNEL_SELECT,
+            branch: { select: { id: true, name: true } },
+            cluster: { select: { id: true, name: true } },
+          },
+        }),
+        prisma.channelMembership.count({ where: { channelId } }),
+      ]);
+      if (!channel) throw NotFound('Channel not found');
+      return { ...channel, memberCount };
+    });
     return {
-      ...channel,
-      memberCount,
+      ...meta,
       myRole: membership?.role ?? (role === 'SUPER_ADMIN' ? 'ADMIN' : 'MEMBER'),
       isMuted: !!membership?.mutedAt,
     };
@@ -153,22 +157,34 @@ export const channelService = {
   // branch channel gets large.
   async members(userId: string, role: string, channelId: string, limit = 50) {
     const membership = await this.requireMember(userId, role, channelId);
-    const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { isReadOnly: true } });
-    if (channel?.isReadOnly && role !== 'SUPER_ADMIN' && membership?.role === 'MEMBER') {
+    // The DB part (rows + count + isReadOnly) is cached; presence is merged live on every request
+    // so the online dots stay accurate. The read-only gate runs AFTER the cache read — the cached
+    // blob is shared, the decision is per-caller.
+    const data = await cached(cacheKeys.channelMembers(channelId), 60, async () => {
+      const [channel, memberCount, rows] = await Promise.all([
+        prisma.channel.findUnique({ where: { id: channelId }, select: { isReadOnly: true } }),
+        prisma.channelMembership.count({ where: { channelId } }),
+        prisma.channelMembership.findMany({
+          where: { channelId },
+          orderBy: { joinedAt: 'asc' },
+          take: Math.min(limit, 200),
+          select: { role: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
+        }),
+      ]);
+      return {
+        isReadOnly: channel?.isReadOnly ?? false,
+        memberCount,
+        members: rows.map((r) => ({ ...r.user, role: r.role })),
+      };
+    });
+    if (data.isReadOnly && role !== 'SUPER_ADMIN' && membership?.role === 'MEMBER') {
       throw Forbidden('Only admins can view members in view-only channels');
     }
-    const [memberCount, rows] = await Promise.all([
-      prisma.channelMembership.count({ where: { channelId } }),
-      prisma.channelMembership.findMany({
-        where: { channelId },
-        orderBy: { joinedAt: 'asc' },
-        take: Math.min(limit, 200),
-        select: { role: true, user: { select: { id: true, displayName: true, avatarUrl: true } } },
-      }),
-    ]);
-    const members = rows.map((r) => ({ ...r.user, role: r.role }));
-    const presence = await getBulkPresence(members.map((m) => m.id));
-    return { memberCount, members: members.map((m) => ({ ...m, status: presence[m.id] })) };
+    const presence = await getBulkPresence(data.members.map((m) => m.id));
+    return {
+      memberCount: data.memberCount,
+      members: data.members.map((m) => ({ ...m, status: presence[m.id] })),
+    };
   },
 
   async mute(userId: string, channelId: string) {
