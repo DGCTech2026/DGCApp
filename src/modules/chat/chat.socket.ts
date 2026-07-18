@@ -60,15 +60,18 @@ export function registerSocketHandlers(io: Server) {
       socket.broadcast.emit('presence', { userId, status: 'online' });
     }
 
-    // Join channel rooms + any live audio rooms the user is still in (reconnect mid-room)
+    // Fetch display name (for typing indicators) alongside channel/room memberships in one round.
+    let displayName: string | null = null;
     try {
-      const [memberships, audioRooms] = await Promise.all([
+      const [user, memberships, audioRooms] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId }, select: { displayName: true } }),
         prisma.channelMembership.findMany({ where: { userId }, select: { channelId: true } }),
         prisma.audioRoomParticipant.findMany({
           where: { userId, leftAt: null, room: { status: 'LIVE' } },
           select: { roomId: true },
         }),
       ]);
+      displayName = user?.displayName ?? null;
       for (const m of memberships) socket.join(`channel:${m.channelId}`);
       for (const r of audioRooms) socket.join(`audio-room:${r.roomId}`);
     } catch (err) {
@@ -89,6 +92,7 @@ export function registerSocketHandlers(io: Server) {
         socket.to(`channel:${payload.channelId}`).emit('typing:start', {
           channelId: payload.channelId,
           userId,
+          displayName,
         });
       }
     });
@@ -98,6 +102,7 @@ export function registerSocketHandlers(io: Server) {
         socket.to(`channel:${payload.channelId}`).emit('typing:stop', {
           channelId: payload.channelId,
           userId,
+          displayName,
         });
       }
     });
@@ -108,6 +113,7 @@ export function registerSocketHandlers(io: Server) {
         socket.to(`channel:${payload.channelId}`).emit('typing:start', {
           channelId: payload.channelId,
           userId,
+          displayName,
         });
       }
     });

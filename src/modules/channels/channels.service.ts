@@ -54,10 +54,11 @@ export const channelService = {
     const unreadMap = new Map(unreadRows.map((r) => [r.channelId, r.count]));
 
     const lastRows = await prisma.$queryRaw<
-      { id: string; channelId: string; body: string | null; type: string; senderId: string; createdAt: Date }[]
+      { id: string; channelId: string; body: string | null; type: string; senderId: string; senderName: string | null; createdAt: Date }[]
     >`
-      SELECT DISTINCT ON (m."channelId") m."id", m."channelId", m."body", m."type", m."senderId", m."createdAt"
+      SELECT DISTINCT ON (m."channelId") m."id", m."channelId", m."body", m."type", m."senderId", u."displayName" AS "senderName", m."createdAt"
       FROM "Message" m
+      JOIN "User" u ON u."id" = m."senderId"
       WHERE m."channelId" IN (${Prisma.join(channelIds)}) AND m."deletedAt" IS NULL
       ORDER BY m."channelId", m."createdAt" DESC, m."id" DESC`;
     const lastMap = new Map(lastRows.map((r) => [r.channelId, r]));
