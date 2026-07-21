@@ -1,7 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { verifyAccessToken } from '../../utils/jwt';
 import { prisma } from '../../infra/db';
-import { redis } from '../../infra/redis';
+import { redis, withDeadline } from '../../infra/redis';
 import { logger } from '../../infra/logger';
 
 const PRESENCE_TTL = 120; // seconds — refreshed every heartbeat; expires = offline
@@ -9,8 +9,10 @@ const PRESENCE_KEY = (uid: string) => `presence:${uid}`;
 
 type PresenceStatus = 'online' | 'away' | 'offline';
 
+// Presence reads race a short deadline: if Redis is slow/unreachable, everyone reads as
+// 'offline' and the request proceeds — an online dot is never worth stalling the chat list for.
 export async function getUserPresence(userId: string): Promise<PresenceStatus> {
-  const val = await redis.get(PRESENCE_KEY(userId));
+  const val = await withDeadline(redis.get(PRESENCE_KEY(userId)), 300, null);
   return (val as PresenceStatus) || 'offline';
 }
 
@@ -18,7 +20,7 @@ export async function getBulkPresence(userIds: string[]): Promise<Record<string,
   if (!userIds.length) return {};
   const pipeline = redis.pipeline();
   for (const id of userIds) pipeline.get(PRESENCE_KEY(id));
-  const results = await pipeline.exec();
+  const results = await withDeadline(pipeline.exec(), 300, null);
   const out: Record<string, PresenceStatus> = {};
   userIds.forEach((id, i) => {
     const val = results?.[i]?.[1] as string | null;
@@ -42,12 +44,13 @@ export function registerSocketHandlers(io: Server) {
   // Refresh the presence TTL and report whether the visible status changed. Callers broadcast
   // only on change — re-broadcasting every heartbeat is an O(users²) storm for zero information.
   async function setPresence(userId: string, status: PresenceStatus): Promise<boolean> {
-    const results = await redis
-      .pipeline()
-      .get(PRESENCE_KEY(userId))
-      .set(PRESENCE_KEY(userId), status, 'EX', PRESENCE_TTL)
-      .exec();
-    const previous = (results?.[0]?.[1] as string | null) ?? 'offline';
+    const results = await withDeadline(
+      redis.pipeline().get(PRESENCE_KEY(userId)).set(PRESENCE_KEY(userId), status, 'EX', PRESENCE_TTL).exec(),
+      500,
+      null,
+    );
+    if (!results) return false; // Redis unreachable — skip the broadcast, don't stall the socket
+    const previous = (results[0]?.[1] as string | null) ?? 'offline';
     return previous !== status;
   }
 

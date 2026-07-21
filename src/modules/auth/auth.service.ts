@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { OAuth2Client, type TokenPayload } from 'google-auth-library';
 import appleSignin from 'apple-signin-auth';
 import { prisma } from '../../infra/db';
@@ -11,11 +12,15 @@ import { isDisposableEmail } from '../../utils/email';
 import type { RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
-import { hashValue, verifyHash } from '../../utils/hash';
+import { hashValue, verifyHash, sha256, verifyTokenHash } from '../../utils/hash';
 import { BadRequest, Unauthorized, Forbidden, Conflict } from '../../utils/errors';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+// Retry-grace windows for flaky networks: when a client's request succeeds but the response is
+// lost in transit, its retry must not dead-end (logged out / forced to request a new code).
+const ROTATION_GRACE_MS = 60 * 1000;
+const OTP_RETRY_GRACE_S = 90;
 const googleClient = new OAuth2Client();
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -28,19 +33,35 @@ type TokenUser = {
   deletedAt?: Date | null;
 };
 
+// Compact profile embedded in every auth response so the app can render immediately after
+// login/refresh without a follow-up GET /users/me — one round trip instead of two, which is
+// the difference between "opens" and "hangs" on a slow connection.
+const AUTH_USER_SELECT = {
+  id: true,
+  email: true,
+  phoneNumber: true,
+  displayName: true,
+  avatarUrl: true,
+  globalRole: true,
+} as const;
+
 // Single chokepoint for token issuance → a suspended or deleted account can't get tokens via ANY
 // path (login, OTP, Google, Apple, refresh). This is what gives admin suspend real teeth.
 async function issueTokensFor(user: TokenUser) {
   if (user.deletedAt) throw Unauthorized('Account not found');
   if (user.suspendedAt) throw Forbidden('Your account has been suspended');
-  const refreshToken = signRefreshToken(user.id);
-  await prisma.refreshToken.create({ data: { userId: user.id, hash: await hashValue(refreshToken) } });
+  const jti = randomUUID(); // becomes the RefreshToken row id → O(1) lookup on refresh/logout
+  const refreshToken = signRefreshToken(user.id, jti);
   const accessToken = signAccessToken({
     sub: user.id,
     role: user.globalRole,
     ...(user.email ? { email: user.email } : {}),
   });
-  return { accessToken, refreshToken };
+  const [, profile] = await Promise.all([
+    prisma.refreshToken.create({ data: { id: jti, userId: user.id, hash: sha256(refreshToken) } }),
+    prisma.user.findUnique({ where: { id: user.id }, select: AUTH_USER_SELECT }),
+  ]);
+  return { accessToken, refreshToken, user: profile };
 }
 
 // Every account starts at the First Timer growth stage (PRD §11 Stage 1).
@@ -91,9 +112,23 @@ async function createOtp(
 
 // Validate + consume a one-time code (single-use, attempt cap, purpose-bound). Returns the consumed
 // record so the caller can read its channel. Throws on any failure.
+//
+// Retry grace: after a successful consume, a short-lived marker is kept in Redis. If the client
+// never received the response (flaky network) and retries the SAME correct code, the retry is
+// honoured instead of dead-ending with "expired" — otherwise every dropped response forces the
+// user to request a brand-new code.
 async function consumeOtp(identifier: string, code: string, purpose: 'AUTH' | 'RESET') {
   const record = await prisma.otp.findUnique({ where: { identifier } });
-  if (!record || record.expiresAt < new Date()) throw BadRequest('OTP expired or not found');
+  if (!record || record.expiresAt < new Date()) {
+    const raw = await redis.get(`otp:grace:${identifier}`);
+    if (raw) {
+      const grace = JSON.parse(raw) as { hash: string; channel: 'EMAIL' | 'SMS'; purpose: 'AUTH' | 'RESET' };
+      if (grace.purpose === purpose && (await verifyOtpHash(grace.hash, code))) {
+        return { identifier, channel: grace.channel, purpose: grace.purpose };
+      }
+    }
+    throw BadRequest('OTP expired or not found');
+  }
   if (record.purpose !== purpose) {
     throw BadRequest('This code was not issued for this action. Please request a new one.');
   }
@@ -107,6 +142,12 @@ async function consumeOtp(identifier: string, code: string, purpose: 'AUTH' | 'R
     throw BadRequest('Invalid OTP');
   }
   await prisma.otp.delete({ where: { identifier } });
+  await redis.set(
+    `otp:grace:${identifier}`,
+    JSON.stringify({ hash: record.hash, channel: record.channel, purpose: record.purpose }),
+    'EX',
+    OTP_RETRY_GRACE_S,
+  );
   return record;
 }
 
@@ -118,11 +159,15 @@ export const authService = {
     if (isDisposableEmail(email)) {
       throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
     }
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    // The duplicate check and the (CPU-bound) password hash don't depend on each other — overlap them.
+    const [existing, passwordHash] = await Promise.all([
+      prisma.user.findUnique({ where: { email }, select: { id: true } }),
+      hashValue(input.password),
+    ]);
     if (existing) throw Conflict('An account with this email already exists. Sign in instead.');
 
     const pending = {
-      passwordHash: await hashValue(input.password),
+      passwordHash,
       displayName: input.displayName,
       phoneNumber: input.phoneNumber ?? null,
       gender: input.gender ?? null,
@@ -130,9 +175,10 @@ export const authService = {
       occupation: input.occupation ?? null,
       branchId: input.branchId ?? null,
     };
-    await redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000));
-
-    const code = await createOtp(email, 'EMAIL', 'AUTH');
+    const [, code] = await Promise.all([
+      redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000)),
+      createOtp(email, 'EMAIL', 'AUTH'),
+    ]);
     await emailQueue.add('send-otp', { type: 'otp', to: email, code });
     return { ok: true };
   },
@@ -240,24 +286,41 @@ export const authService = {
   },
 
   async refreshTokens(rawToken: string) {
-    let payload: { sub: string };
+    let payload: { sub: string; jti?: string };
     try {
       payload = verifyRefreshToken(rawToken);
     } catch {
       throw Unauthorized('Invalid refresh token');
     }
 
-    const stored = await prisma.refreshToken.findMany({ where: { userId: payload.sub } });
-    let match: (typeof stored)[number] | undefined;
-    for (const t of stored) {
-      if (await verifyHash(t.hash, rawToken).catch(() => false)) {
+    // O(1) lookup via jti; scan is the fallback for tokens issued before jti existed.
+    let match: { id: string; revokedAt: Date | null } | undefined;
+    if (payload.jti) {
+      const t = await prisma.refreshToken.findUnique({ where: { id: payload.jti } });
+      if (t && t.userId === payload.sub && (await verifyTokenHash(t.hash, rawToken))) {
         match = t;
-        break;
+      }
+    } else {
+      const stored = await prisma.refreshToken.findMany({ where: { userId: payload.sub } });
+      for (const t of stored) {
+        if (await verifyTokenHash(t.hash, rawToken)) {
+          match = t;
+          break;
+        }
       }
     }
     if (!match) throw Unauthorized('Refresh token revoked');
 
-    await prisma.refreshToken.delete({ where: { id: match.id } }); // rotate
+    // Rotate by marking revoked (not deleting). If the client never received our response and
+    // retries with the same token inside the grace window, honour it — otherwise every dropped
+    // refresh response logs the user out. Reuse AFTER the window is treated as theft.
+    if (match.revokedAt) {
+      if (Date.now() - match.revokedAt.getTime() > ROTATION_GRACE_MS) {
+        throw Unauthorized('Refresh token revoked');
+      }
+    } else {
+      await prisma.refreshToken.update({ where: { id: match.id }, data: { revokedAt: new Date() } });
+    }
 
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: payload.sub },
@@ -340,9 +403,22 @@ export const authService = {
   },
 
   async logout(userId: string, rawToken: string) {
+    // O(1) via jti when present; scan fallback for pre-jti tokens.
+    try {
+      const payload = verifyRefreshToken(rawToken);
+      if (payload.jti) {
+        const t = await prisma.refreshToken.findUnique({ where: { id: payload.jti } });
+        if (t && t.userId === userId && (await verifyTokenHash(t.hash, rawToken))) {
+          await prisma.refreshToken.delete({ where: { id: t.id } });
+        }
+        return;
+      }
+    } catch {
+      return; // invalid/expired token — nothing to revoke
+    }
     const stored = await prisma.refreshToken.findMany({ where: { userId } });
     for (const t of stored) {
-      if (await verifyHash(t.hash, rawToken).catch(() => false)) {
+      if (await verifyTokenHash(t.hash, rawToken)) {
         await prisma.refreshToken.delete({ where: { id: t.id } });
         return;
       }

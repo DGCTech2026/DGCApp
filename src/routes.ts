@@ -12,10 +12,12 @@ import { notificationsRouter } from './modules/notifications/notifications.route
 import { adminRouter } from './modules/admin/admin.routes';
 import { announcementsRouter } from './modules/announcements/announcements.routes';
 import { audioRoomsRouter } from './modules/audio-rooms/audio-rooms.routes';
+import { bootstrapRouter } from './modules/bootstrap/bootstrap.routes';
 
 export const router = Router();
 
 router.use('/auth', authRouter);
+router.use('/bootstrap', bootstrapRouter);
 router.use('/users', usersRouter);
 router.use('/branches', branchesRouter);
 router.use('/media', mediaRouter);

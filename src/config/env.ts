@@ -9,7 +9,9 @@ const schema = z.object({
   REDIS_URL: z.string().url(),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
-  JWT_ACCESS_TTL: z.string().default('15m'),
+  // 1h balances security vs. connectivity: short enough that suspension bites within the hour,
+  // long enough that a poor connection isn't forced through a refresh round trip every 15 min.
+  JWT_ACCESS_TTL: z.string().default('1h'),
   JWT_REFRESH_TTL: z.string().default('30d'),
   BREVO_API_KEY: z.string().min(1),
   BREVO_SENDER_EMAIL: z.string().email(),

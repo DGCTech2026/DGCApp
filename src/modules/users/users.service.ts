@@ -3,6 +3,7 @@ import { NotFound, BadRequest, Conflict } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
 import { getUserPresence } from '../chat/chat.socket';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
+import { optimizeAvatar } from '../../utils/cloudinaryUrl';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -81,6 +82,9 @@ export const userService = {
   async updateMe(userId: string, data: UpdateMeInput) {
     const { branchId, email, phoneNumber, ...profile } = data;
     const updates: Record<string, unknown> = { ...profile };
+    // Store avatars as right-sized auto-format delivery URLs — every list/chat render everywhere
+    // then downloads ~10-50KB instead of a full-resolution original.
+    if (typeof updates.avatarUrl === 'string') updates.avatarUrl = optimizeAvatar(updates.avatarUrl);
 
     // Contact additions: fill in the channel the user didn't sign up with. Only settable when
     // empty (changing a verified identity needs re-verification — a later slice), and unique.

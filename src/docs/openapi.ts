@@ -39,6 +39,17 @@ const tokenSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string(),
   isNewUser: z.boolean().optional(), // true when this sign-in created the account → route to onboarding
+  // Compact profile so the app can render straight from the auth response — no GET /users/me round trip.
+  user: z
+    .object({
+      id: z.string(),
+      email: z.string().nullable(),
+      phoneNumber: z.string().nullable(),
+      displayName: z.string().nullable(),
+      avatarUrl: z.string().nullable(),
+      globalRole: z.string(),
+    })
+    .nullable(),
 });
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const branchSchema = z.object({
@@ -207,6 +218,33 @@ registry.registerPath({
           folder: z.string(),
           signature: z.string(),
           uploadUrl: z.string(),
+          expiresAt: z.string(), // cache the whole response per type and reuse until this moment
+        }),
+      ),
+    },
+    401: { description: 'Unauthorized', ...json(errorSchema) },
+  },
+});
+
+// ---- bootstrap ----
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/bootstrap',
+  tags: ['bootstrap'],
+  summary:
+    'App-launch payload in ONE round trip: me + channels + notifications + live audio rooms + upcoming events',
+  security: bearer,
+  responses: {
+    200: {
+      description:
+        'Everything the home screen needs. Call this once on launch instead of 5 separate GETs — on slow networks this is the difference between a 2s and a 10s cold open.',
+      ...json(
+        z.object({
+          me: z.object({}).passthrough(),
+          channels: z.array(z.object({}).passthrough()),
+          notifications: z.object({ items: z.array(z.object({}).passthrough()), unreadCount: z.number() }),
+          liveAudioRooms: z.array(z.object({}).passthrough()),
+          upcomingEvents: z.array(z.object({}).passthrough()),
         }),
       ),
     },
@@ -981,9 +1019,21 @@ const apiDescription = [
   '',
   '## Tokens',
   '',
-  '- `accessToken` — valid 15 minutes; send it in the `Authorization` header.',
+  '- `accessToken` — valid 1 hour; send it in the `Authorization` header.',
   '- `refreshToken` — valid 30 days and rotates on every use; store it securely.',
   '- On a `401` with `"Invalid or expired token"`, call `POST /api/v1/auth/refresh`, then retry the request once.',
+  '- **Retry-safe on flaky networks:** if a refresh response is lost in transit, retrying with the SAME refresh token works for 60 seconds (rotation grace). Likewise a consumed OTP code can be re-verified for 90 seconds. Retries after a network error are safe — do NOT log the user out or force a new code on the first failure.',
+  '- Every auth response (`login`, `verify-otp`, `google`, `refresh`, `reset-password`) includes a compact `user` object — render from it directly instead of following up with `GET /users/me`.',
+  '',
+  '## App launch (do this, not 5 GETs)',
+  '',
+  '1. Render immediately from local cache (last known state) — never block the splash screen on the network.',
+  '2. Call **`GET /api/v1/bootstrap`** once: it returns `me`, `channels`, `notifications` (+ `unreadCount`), `liveAudioRooms`, and `upcomingEvents` in a single round trip. Reconcile your cached UI with it when it arrives.',
+  '3. Connect the socket. Done — the app is fully live after ONE http request.',
+  '',
+  '## HTTP caching (free speed on repeat views)',
+  '',
+  'Stable GETs now send `Cache-Control: private, max-age=N` — `/branches` (300s), `/clusters` (60s), `/events` (60s), `/users/:userId` (120s). The device HTTP cache serves repeats instantly with zero network. iOS honours this automatically; on Android/React Native verify OkHttp caching or keep a small in-app cache keyed by URL that honours `max-age`. Chat, channels, and notifications are never cached — they must always be fresh.',
   '',
   '## Sign up vs. sign in — which endpoint?',
   '',
@@ -1001,7 +1051,7 @@ const apiDescription = [
   '## Flow 1 — Email + password registration',
   '',
   '1. `POST /api/v1/auth/register` with the Create Account form, including `branchId`. Emails a 6-digit code and returns `{ "ok": true }`.',
-  '2. `POST /api/v1/auth/verify-otp` with `{ "identifier": "<email>", "code": "<6-char string>" }`. Finishes the full account and returns `{ "accessToken", "refreshToken", "isNewUser": true }`.',
+  '2. `POST /api/v1/auth/verify-otp` with `{ "identifier": "<email>", "code": "<6-char string>" }`. Finishes the full account and returns `{ "accessToken", "refreshToken", "isNewUser": true, "user": {...} }`.',
   '',
   'Because the name and branch were supplied in step 1, the account is already onboarded — go straight to the dashboard.',
   '',
@@ -1010,7 +1060,7 @@ const apiDescription = [
   '- Google: `POST /api/v1/auth/google` with `{ "idToken" }`.',
   '- Email OTP: `POST /api/v1/auth/email/request-otp` with `{ "email" }`, then `POST /api/v1/auth/verify-otp` with `{ "identifier": "<email>", "code" }`.',
   '',
-  'Both return `{ "accessToken", "refreshToken", "isNewUser" }` and create a minimal account. Continue with Onboarding.',
+  'Both return `{ "accessToken", "refreshToken", "isNewUser", "user" }` and create a minimal account. Continue with Onboarding.',
   '',
   '## Onboarding (passwordless users)',
   '',
@@ -1024,7 +1074,7 @@ const apiDescription = [
   '',
   '- Login (email + password): `POST /api/v1/auth/login` with `{ "email", "password" }`, returns a token pair.',
   '- Forgot password: `POST /api/v1/auth/password/request-otp` with `{ "email" }`, then `POST /api/v1/auth/password/verify-otp` with `{ "email", "code" }` to confirm the code, then `POST /api/v1/auth/reset-password` with `{ "email", "code", "newPassword" }` to change the password (also signs them in).',
-  '- Refresh: `POST /api/v1/auth/refresh` with `{ "refreshToken" }` (no Bearer header). Returns a new pair; the old refresh token stops working.',
+  '- Refresh: `POST /api/v1/auth/refresh` with `{ "refreshToken" }` (no Bearer header). Returns a new pair; the old refresh token stops working after a 60s grace window (safe to retry after a network error).',
   '- Logout: `POST /api/v1/auth/logout` with `{ "refreshToken" }` (Bearer header).',
   '',
   '## Delete account',
@@ -1037,7 +1087,11 @@ const apiDescription = [
   '2. Upload the file directly to the returned `uploadUrl` (Cloudinary, multipart/form-data); Cloudinary returns a `secure_url`.',
   '3. `PATCH /api/v1/users/me` with `{ "avatarUrl": "<secure_url>" }`.',
   '',
-  'Optimize images on display by inserting a transform after `/upload/`, e.g. `c_fill,g_face,w_96,h_96,dpr_auto,f_auto,q_auto` for avatars.',
+  '**Make uploads fast on bad networks:**',
+  '- **Cache the signature.** The response includes `expiresAt` (1 hour). Reuse one cached signature per `type` for every upload until then — do NOT call `/media/signature` before each upload. First upload of the hour pays one extra round trip; the rest pay zero.',
+  '- **Compress before uploading.** Resize images to max 1600px and ~80% JPEG quality on-device (expo-image-manipulator) before sending. A 6MB camera photo becomes ~300KB — the difference between a 90-second and a 4-second upload on 3G.',
+  '',
+  '**Displaying media:** the backend now stores chat images and avatars as optimized delivery URLs (`f_auto,q_auto`, size-capped) — render `mediaUrl`/`avatarUrl` as-is. Message payloads also include **`thumbUrl`** (small image preview, or a poster frame for videos): use `thumbUrl` while scrolling the chat list and load `mediaUrl` only when the user opens the media full-screen.',
   '',
   '## Realtime (Socket.io)',
   '',

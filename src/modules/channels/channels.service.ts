@@ -3,6 +3,7 @@ import { prisma } from '../../infra/db';
 import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
 import { getBulkPresence } from '../chat/chat.socket';
 import { cached, cacheKeys } from '../../infra/cache';
+import { thumbUrl } from '../../utils/cloudinaryUrl';
 
 const CHANNEL_SELECT = {
   id: true,
@@ -207,7 +208,7 @@ export const channelService = {
 
   async pinnedMessages(userId: string, role: string, channelId: string) {
     await this.requireMember(userId, role, channelId);
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { channelId, pinnedAt: { not: null }, deletedAt: null },
       orderBy: { pinnedAt: 'desc' },
       select: {
@@ -215,6 +216,7 @@ export const channelService = {
         sender: { select: { id: true, displayName: true, avatarUrl: true } },
       },
     });
+    return rows.map((m) => ({ ...m, thumbUrl: thumbUrl(m.mediaUrl, m.type) }));
   },
 
   async sharedMedia(userId: string, role: string, channelId: string, cursor?: string, limit = 30) {
@@ -237,7 +239,7 @@ export const channelService = {
       },
     });
     return {
-      items,
+      items: items.map((m) => ({ ...m, thumbUrl: thumbUrl(m.mediaUrl, m.type) })),
       nextCursor: items.length === limit ? items[items.length - 1]!.createdAt.toISOString() : null,
     };
   },

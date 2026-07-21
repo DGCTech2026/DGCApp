@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validate';
+import { cacheControl } from '../../middleware/cacheControl';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { updateMeSchema, registerDeviceSchema, removeDeviceSchema } from './users.schema';
 import { userController } from './users.controller';
@@ -8,7 +9,7 @@ import { userController } from './users.controller';
 export const usersRouter = Router();
 
 usersRouter.get('/me', authenticate, asyncHandler(userController.getMe));
-usersRouter.get('/:userId', authenticate, asyncHandler(userController.getProfile));
+usersRouter.get('/:userId', authenticate, cacheControl(120), asyncHandler(userController.getProfile));
 usersRouter.patch('/me', authenticate, validate(updateMeSchema), asyncHandler(userController.updateMe));
 usersRouter.delete('/me', authenticate, asyncHandler(userController.deleteMe));
 

@@ -28,6 +28,10 @@ export const mediaService = {
       folder,
       signature,
       uploadUrl: `https://api.cloudinary.com/v1_1/${cfg.cloud_name}/auto/upload`,
+      // Cloudinary accepts a signature for 1 hour after `timestamp`. The client should cache
+      // this response per upload type and reuse it until expiresAt — one signature covers any
+      // number of uploads to this folder, so most uploads need ZERO extra round trips.
+      expiresAt: new Date((timestamp + 3600) * 1000).toISOString(),
     };
   },
 };

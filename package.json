@@ -26,6 +26,7 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
@@ -52,6 +53,7 @@
     "argon2": "^0.44.0",
     "bullmq": "^5.79.1",
     "cloudinary": "^2.10.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.6",
     "disposable-email-domains": "^1.0.62",
     "dotenv": "^17.4.2",

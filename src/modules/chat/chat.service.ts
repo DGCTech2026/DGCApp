@@ -3,6 +3,7 @@ import { channelService } from '../channels/channels.service';
 import { notificationQueue } from '../../infra/queue';
 import { emitToChannel } from '../../infra/realtime';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
+import { optimizeImage, thumbUrl } from '../../utils/cloudinaryUrl';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
 
 const POLL_SELECT = {
@@ -42,6 +43,12 @@ const MESSAGE_SELECT = {
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
   reactions: { select: { emoji: true, userId: true } },
 };
+
+// Attach a small preview URL (image thumb / video poster) so lists render fast on slow networks.
+// Applied to every message that leaves the server — REST and socket payloads stay identical.
+function withThumb<T extends { mediaUrl: string | null; type: string }>(m: T): T & { thumbUrl: string | null } {
+  return { ...m, thumbUrl: thumbUrl(m.mediaUrl, m.type) };
+}
 
 // Keyset cursor over (createdAt, id) — stable even when timestamps collide.
 function encodeCursor(m: { createdAt: Date; id: string }) {
@@ -111,17 +118,20 @@ export const chatService = {
         },
         select: MESSAGE_SELECT,
       });
-      emitToChannel(channelId, 'message:new', message);
-      return message;
+      const decorated = withThumb(message);
+      emitToChannel(channelId, 'message:new', decorated);
+      return decorated;
     }
 
+    // Store images as right-sized auto-format delivery URLs (originals stay in Cloudinary) so
+    // every future read — on any client — downloads a fraction of the bytes.
     const message = await prisma.message.create({
       data: {
         channelId,
         senderId: userId,
         type: dto.type,
         body: dto.body ?? null,
-        mediaUrl: dto.mediaUrl ?? null,
+        mediaUrl: dto.mediaUrl ? (dto.type === 'IMAGE' ? optimizeImage(dto.mediaUrl) : dto.mediaUrl) : null,
         replyToId: dto.replyToId ?? null,
         contactName: dto.contactName ?? null,
         contactPhone: dto.contactPhone ?? null,
@@ -129,7 +139,7 @@ export const chatService = {
       },
       select: MESSAGE_SELECT,
     });
-    emitToChannel(channelId, 'message:new', message);
+    emitToChannel(channelId, 'message:new', withThumb(message));
 
     // All recipient-side work (peer lookup, notification rows, FCM) happens in the notification
     // worker — the sender's request only pays for one Redis enqueue per job.
@@ -164,7 +174,7 @@ export const chatService = {
         });
       }
     }
-    return message;
+    return withThumb(message);
   },
 
   async list(userId: string, role: string, channelId: string, opts: ListMessagesInput) {
@@ -199,7 +209,7 @@ export const chatService = {
       });
       peerLastReadAt = peer?.lastReadAt ?? null;
     }
-    return { messages, nextCursor: hasMore && last ? encodeCursor(last) : null, peerLastReadAt };
+    return { messages: messages.map(withThumb), nextCursor: hasMore && last ? encodeCursor(last) : null, peerLastReadAt };
   },
 
   async addReaction(userId: string, role: string, messageId: string, emoji: string) {
@@ -238,7 +248,7 @@ export const chatService = {
       select: MESSAGE_SELECT,
     });
     emitToChannel(msg.channelId, pinned ? 'message:pinned' : 'message:unpinned', { messageId });
-    return message;
+    return withThumb(message);
   },
 
   async remove(userId: string, role: string, messageId: string) {
@@ -271,8 +281,9 @@ export const chatService = {
       data: { body, editedAt: new Date() },
       select: MESSAGE_SELECT,
     });
-    emitToChannel(msg.channelId, 'message:edited', message);
-    return message;
+    const decorated = withThumb(message);
+    emitToChannel(msg.channelId, 'message:edited', decorated);
+    return decorated;
   },
 
   // Forward a message into another channel you can post to (PRD §7). Copies the content and links
@@ -300,19 +311,21 @@ export const chatService = {
       },
       select: MESSAGE_SELECT,
     });
-    emitToChannel(targetChannelId, 'message:new', message);
-    return message;
+    const decorated = withThumb(message);
+    emitToChannel(targetChannelId, 'message:new', decorated);
+    return decorated;
   },
 
   // Search a channel's messages (PRD §7). Case-insensitive substring on the body.
   async search(userId: string, role: string, channelId: string, q: string) {
     await channelService.requireMember(userId, role, channelId);
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { channelId, deletedAt: null, body: { contains: q, mode: 'insensitive' } },
       orderBy: { createdAt: 'desc' },
       take: 30,
       select: MESSAGE_SELECT,
     });
+    return rows.map(withThumb);
   },
 
   // Vote on a poll option. Respects allowMultiple — if false, moves the vote to the new option.

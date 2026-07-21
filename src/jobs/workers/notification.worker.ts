@@ -159,11 +159,16 @@ export const notificationWorker = new Worker(
     if (job.name === 'janitor-scan') {
       const now = new Date();
       const days = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000);
-      const [otps, readNotifs, oldNotifs, reminders] = await Promise.all([
+      const [otps, readNotifs, oldNotifs, reminders, staleTokens] = await Promise.all([
         prisma.otp.deleteMany({ where: { expiresAt: { lt: now } } }),
         prisma.notification.deleteMany({ where: { readAt: { not: null, lt: days(30) } } }),
         prisma.notification.deleteMany({ where: { createdAt: { lt: days(90) } } }),
         prisma.audioRoomReminder.deleteMany({ where: { room: { status: 'ENDED' } } }),
+        // Rotated refresh tokens are kept briefly (revokedAt) for the flaky-network retry grace
+        // window; rows older than a day — or past the 30d JWT lifetime — are dead weight.
+        prisma.refreshToken.deleteMany({
+          where: { OR: [{ revokedAt: { lt: days(1) } }, { createdAt: { lt: days(31) } }] },
+        }),
       ]);
       logger.info(
         {
@@ -172,6 +177,7 @@ export const notificationWorker = new Worker(
           readNotifications: readNotifs.count,
           oldNotifications: oldNotifs.count,
           staleReminders: reminders.count,
+          staleRefreshTokens: staleTokens.count,
         },
         'Janitor scan complete',
       );

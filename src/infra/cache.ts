@@ -1,34 +1,37 @@
-import { redis } from './redis';
+import { redis, withDeadline } from './redis';
 import { logger } from './logger';
 
 // Read-through JSON cache over the shared Redis client. For read-heavy, rarely-written data
-// (member lists, channel meta, profiles, branch/cluster catalogues). Two safety rules:
-//   1. A cache failure must never break a request — always fall back to the loader.
+// (member lists, channel meta, profiles, branch/cluster catalogues). Safety rules:
+//   1. A cache failure must never break OR SLOW a request — reads race a 300ms deadline and
+//      fall back to the loader, so a Redis outage degrades to DB speed instead of hanging.
 //   2. Per-user fields (myRole, isMuted, presence, isMember) are NEVER cached — callers cache
 //      the shared payload and merge user-specific bits live.
 export async function cached<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
-  try {
-    const hit = await redis.get(key);
-    if (hit !== null) return JSON.parse(hit) as T;
-  } catch (err) {
-    logger.warn({ err, key }, 'cache read failed — falling back to DB');
+  const hit = await withDeadline(redis.get(key), 300, null);
+  if (hit !== null) {
+    try {
+      return JSON.parse(hit) as T;
+    } catch {
+      // corrupt entry — fall through to the loader, which overwrites it
+    }
   }
   const fresh = await load();
-  try {
-    await redis.set(key, JSON.stringify(fresh), 'EX', ttlSeconds);
-  } catch (err) {
+  // Fire-and-forget: the response must not wait on the cache write. If Redis is briefly down,
+  // ioredis queues the command and flushes it on reconnect.
+  redis.set(key, JSON.stringify(fresh), 'EX', ttlSeconds).catch((err) => {
     logger.warn({ err, key }, 'cache write failed');
-  }
+  });
   return fresh;
 }
 
 export async function invalidate(...keys: string[]) {
   if (!keys.length) return;
-  try {
-    await redis.del(...keys);
-  } catch (err) {
+  // Fire-and-forget for the same reason: a mutation response must not block on Redis. Queued
+  // deletes flush on reconnect; worst case a stale entry lives out its short TTL.
+  redis.del(...keys).catch((err) => {
     logger.warn({ err, keys }, 'cache invalidate failed');
-  }
+  });
 }
 
 // Single place for key shapes so services and invalidators can't drift apart.
