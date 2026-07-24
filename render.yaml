@@ -23,6 +23,14 @@ services:
       # --- Non-secret config (safe to keep in the blueprint) ---
       - key: NODE_ENV
         value: production
+      - key: SERVICE_NAME
+        value: dgc-backend
+      - key: LOG_LEVEL
+        value: info
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: '0.05'
       - key: JWT_ACCESS_TTL
         value: 7d # NOTE: long-lived access token — a suspended/banned user keeps access until it expires. Tighten (15m + frontend refresh) before launch.
       - key: JWT_REFRESH_TTL
@@ -32,7 +40,7 @@ services:
       - key: BREVO_SENDER_NAME
         value: DGC global
       - key: CORS_ORIGIN
-        value: "*" # TIGHTEN to your real app origin(s) before launch (CLAUDE.md §9)
+        value: '*' # TIGHTEN to your real app origin(s) before launch (CLAUDE.md §9)
       # --- Secrets: enter in the Render dashboard. `sync: false` = prompted, never stored in git. ---
       - key: DATABASE_URL
         sync: false
@@ -52,4 +60,8 @@ services:
         sync: false
       - key: FCM_SERVICE_ACCOUNT
         sync: false # base64-encoded Firebase service-account JSON; push stays off until set
+      - key: METRICS_TOKEN
+        sync: false # optional bearer token for /metrics; set before exposing this endpoint outside trusted networks
+      - key: SENTRY_DSN
+        sync: false
 # NOTE: PORT is injected by Render automatically — do not set it. The server reads process.env.PORT.

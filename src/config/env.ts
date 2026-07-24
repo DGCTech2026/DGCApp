@@ -1,9 +1,18 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const optionalString = z.preprocess((value) => (value === '' ? undefined : value), z.string().optional());
+const optionalUrl = z.preprocess((value) => (value === '' ? undefined : value), z.string().url().optional());
+const sampleRate = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.coerce.number().min(0).max(1).default(0.05),
+);
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(4000),
+  SERVICE_NAME: z.string().default('dgc-backend'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url(),
   REDIS_URL: z.string().url(),
@@ -28,6 +37,11 @@ const schema = z.object({
   AGORA_APP_ID: z.string().optional(),
   AGORA_APP_CERTIFICATE: z.string().optional(),
   CORS_ORIGIN: z.string().default('*'),
+  METRICS_TOKEN: z.string().optional(),
+  SENTRY_DSN: optionalUrl,
+  SENTRY_ENVIRONMENT: optionalString,
+  SENTRY_RELEASE: optionalString,
+  SENTRY_TRACES_SAMPLE_RATE: sampleRate,
 });
 
 const parsed = schema.safeParse(process.env);

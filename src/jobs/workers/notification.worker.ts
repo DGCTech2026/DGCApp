@@ -2,6 +2,8 @@ import { Worker } from 'bullmq';
 import { env } from '../../config/env';
 import { prisma } from '../../infra/db';
 import { logger } from '../../infra/logger';
+import { instrumentWorker } from '../../infra/metrics';
+import { captureJobException } from '../../instrument';
 import { eventService } from '../../modules/events/events.service';
 import { audioRoomService } from '../../modules/audio-rooms/audio-rooms.service';
 import { notificationService } from '../../modules/notifications/notifications.service';
@@ -53,7 +55,10 @@ export const notificationWorker = new Worker(
         const res = await prisma.notification.createMany({ data: chunk });
         created += res.count;
       }
-      await pushService.sendToUsers(members.map((m) => m.userId), { title, body: body ?? null, data: { channelId, messageId } });
+      await pushService.sendToUsers(
+        members.map((m) => m.userId),
+        { title, body: body ?? null, data: { channelId, messageId } },
+      );
       logger.info({ jobId: job.id, channelId, created }, 'Announcement fan-out complete');
       return;
     }
@@ -191,4 +196,7 @@ export const notificationWorker = new Worker(
 
 notificationWorker.on('failed', (job, err) => {
   logger.error({ jobId: job?.id, err }, 'Notification job failed');
+  captureJobException('notification', job, err);
 });
+
+instrumentWorker(notificationWorker, 'notification');

@@ -2,6 +2,8 @@ import { Worker } from 'bullmq';
 import { env } from '../../config/env';
 import { growthEngine } from '../../modules/growth/growth.engine';
 import { logger } from '../../infra/logger';
+import { instrumentWorker } from '../../infra/metrics';
+import { captureJobException } from '../../instrument';
 
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 
@@ -19,4 +21,7 @@ export const growthWorker = new Worker(
 
 growthWorker.on('failed', (job, err) => {
   logger.error({ jobId: job?.id, err }, 'Growth job failed');
+  captureJobException('growth', job, err);
 });
+
+instrumentWorker(growthWorker, 'growth');

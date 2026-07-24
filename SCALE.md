@@ -6,6 +6,7 @@
 > query optimizations, **not** a redesign.
 
 ## Already scale-friendly (no work needed)
+
 - Stateless REST + JWT (verified locally, no per-request DB hit) → horizontal scale by adding instances.
 - Socket.io + `@socket.io/redis-adapter` already wired → cross-instance broadcast works.
 - Slow/fan-out work on BullMQ (email; push/growth later) → off the request path.
@@ -38,7 +39,7 @@
      instances don't burn CPU on jobs.
 
 5. **Query hotspots.**
-   - [x] `GET /channels` unread counts + last message — batched into ~4 queries (was N+1). *(done)*
+   - [x] `GET /channels` unread counts + last message — batched into ~4 queries (was N+1). _(done)_
    - If channels get very large, denormalize unread via a counter only if profiling demands it (a naive
      per-member counter reintroduces N×M writes — avoid; the batched query is usually enough).
 
@@ -49,9 +50,15 @@
      socketio engine) to ~3k concurrent. Find the real ceiling per instance; size instance count from it.
 
 8. **Observability.**
-   - Already have structured logs (pino). Add: request-duration + error-rate metrics, socket connection
-     gauge, BullMQ queue depth, and error tracking (e.g. Sentry). You can't tune what you can't see.
+   - [x] Structured logs with request IDs and secret/header redaction.
+   - [x] `/metrics` exposes request-duration/error-rate metrics, socket connection gauges, BullMQ queue
+         depth, worker job counts/durations, process memory, uptime, and event-loop delay.
+   - [x] `/ready` checks database + Redis separately from cheap `/health` liveness.
+   - [x] Sentry SDK wired for Express 500s, worker failures, release/environment tagging, and PII redaction.
+   - In Sentry, create alerts for: new production issue, error-rate spike, slow transaction spike, and repeated
+     worker failures.
 
 ## Cost note
+
 This target is modest — a handful of small Render instances + a paid Redis + pooled Postgres. Don't
-provision for 10k *concurrent* (a 3–10× harder bar) unless real numbers justify it.
+provision for 10k _concurrent_ (a 3–10× harder bar) unless real numbers justify it.
