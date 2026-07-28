@@ -25,6 +25,7 @@ import { createBranchSchema, setRoleSchema, assignUserSchema } from '../modules/
 import { submitCertificateSchema, adminVerifyRequirementSchema, rejectCertificateSchema } from '../modules/growth/growth.schema';
 import { postAnnouncementSchema, announcementAdminSchema } from '../modules/announcements/announcements.schema';
 import { createRoomSchema, updateRoomSchema, promoteSchema } from '../modules/audio-rooms/audio-rooms.schema';
+import { initiateCallSchema, listCallsSchema } from '../modules/calls/calls.schema';
 
 export const registry = new OpenAPIRegistry();
 
@@ -282,6 +283,43 @@ registry.registerPath({
   request: { body: json(openDmSchema) },
   responses: { 201: { description: 'DM channel', ...json(z.object({}).passthrough()) } },
 });
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/dms/{channelId}/calls',
+  tags: ['calls'],
+  summary: 'List voice/video call history for a 1:1 DM',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }), query: listCallsSchema },
+  responses: { 200: { description: 'Calls + nextCursor', ...json(z.object({ calls: z.array(z.object({}).passthrough()), nextCursor: z.string().nullable() })) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/dms/{channelId}/calls',
+  tags: ['calls'],
+  summary: 'Start a 1:1 DM call. Returns call detail + Agora credentials for the caller.',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string() }), body: json(initiateCallSchema) },
+  responses: {
+    201: { description: 'Ringing call + Agora credentials', ...json(z.object({}).passthrough()) },
+    409: { description: 'Caller or callee is already in a live call', ...json(errorSchema) },
+  },
+});
+for (const [path, summary] of [
+  ['/api/v1/calls/{callId}/answer', 'Answer an incoming ringing call. Returns Agora credentials for the callee.'],
+  ['/api/v1/calls/{callId}/decline', 'Decline an incoming ringing call.'],
+  ['/api/v1/calls/{callId}/end', 'End an answered call, or cancel an outgoing ringing call.'],
+  ['/api/v1/calls/{callId}/token', 'Refresh Agora credentials for an active call.'],
+] as const) {
+  registry.registerPath({
+    method: 'post',
+    path,
+    tags: ['calls'],
+    summary,
+    security: bearer,
+    request: { params: z.object({ callId: z.string() }) },
+    responses: { 200: { description: 'Call action result', ...json(z.object({}).passthrough()) } },
+  });
+}
 registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/{channelId}/read',
@@ -1138,6 +1176,12 @@ const apiDescription = [
   '| `message:pinned` / `message:unpinned` | listen | `{ messageId }` |',
   '| `message:deleted` | listen | `{ messageId }` |',
   '| `notification:new` | listen | notification object |',
+  '| `call:incoming` | listen | call object (sent to callee) |',
+  '| `call:ringing` | listen | call object (sent to caller devices) |',
+  '| `call:busy` | listen | `{ channelId, userId, activeCallId, selfBusy }` |',
+  '| `call:answered` | listen | call object |',
+  '| `call:declined` | listen | call object |',
+  '| `call:ended` | listen | call object; status may be `ENDED`, `MISSED`, or `CANCELLED` |',
   '| `audio-room:user-joined` | listen | participant object |',
   '| `audio-room:user-left` | listen | `{ roomId, userId }` |',
   '| `audio-room:role-changed` | listen | `{ roomId, userId, role }` |',
@@ -1147,6 +1191,23 @@ const apiDescription = [
   '| `audio-room:token` | listen | `{ roomId, appId, token, channel, uid }` (sent when promoted to speaker) |',
   '',
   'Sending a message is a REST call (`POST /api/v1/channels/{channelId}/messages`); the server then broadcasts `message:new` to the channel room.',
+  '',
+  '## DM Calls (Agora)',
+  '',
+  '1:1 WhatsApp-style calling is signaling + Agora RTC tokens. The backend supports both `AUDIO` and `VIDEO`; ship voice-first by sending `{ "type": "AUDIO" }`.',
+  '',
+  '### Flow',
+  '',
+  '1. Caller starts a call: `POST /api/v1/dms/:channelId/calls` with `{ "type": "AUDIO" | "VIDEO" }`. Response includes the call row and `agora: { appId, token, channel, uid, media }` for the caller.',
+  '2. Callee receives `call:incoming` over socket plus a high-priority FCM data payload with `notificationType=CALL`, `callAction=incoming`, `callId`, `channelId`, `callType`, `agoraChannel`, caller fields, and `expiresAt`.',
+  '3. Callee answers: `POST /api/v1/calls/:callId/answer`. Response includes Agora credentials for the callee. Both users receive `call:answered`.',
+  '4. Callee declines: `POST /api/v1/calls/:callId/decline`. Both users receive `call:declined`.',
+  '5. Either user hangs up an answered call: `POST /api/v1/calls/:callId/end`. The caller can also use this endpoint to cancel a still-ringing outgoing call. Both users receive `call:ended`.',
+  '6. If nobody answers in about 30 seconds, a background job marks the call `MISSED`, emits `call:ended`, and sends a normal missed-call notification.',
+  '7. Call history for the DM: `GET /api/v1/dms/:channelId/calls?cursor=&limit=`.',
+  '8. Agora tokens can be refreshed while active: `POST /api/v1/calls/:callId/token`.',
+  '',
+  'For Android, create a `calls` notification channel and route `androidFullScreenIntent=true` / `androidForegroundService=true` call data to the foreground service + full-screen intent. For iOS killed-state ringing, route the same call data through CallKit/PushKit VoIP infrastructure when the VoIP certificate flow is ready; the FCM data payload already carries the required fields.',
   '',
   '## Audio Rooms (Agora)',
   '',

@@ -13,6 +13,7 @@ import { adminRouter } from './modules/admin/admin.routes';
 import { announcementsRouter } from './modules/announcements/announcements.routes';
 import { audioRoomsRouter } from './modules/audio-rooms/audio-rooms.routes';
 import { bootstrapRouter } from './modules/bootstrap/bootstrap.routes';
+import { callsRouter, dmsRouter } from './modules/calls/calls.routes';
 
 export const router = Router();
 
@@ -22,6 +23,8 @@ router.use('/users', usersRouter);
 router.use('/branches', branchesRouter);
 router.use('/media', mediaRouter);
 router.use('/channels', channelsRouter);
+router.use('/dms', dmsRouter);
+router.use('/calls', callsRouter);
 router.use('/messages', messagesRouter);
 router.use('/clusters', clustersRouter);
 router.use('/growth', growthRouter);

@@ -6,6 +6,7 @@ import { instrumentWorker } from '../../infra/metrics';
 import { captureJobException } from '../../instrument';
 import { eventService } from '../../modules/events/events.service';
 import { audioRoomService } from '../../modules/audio-rooms/audio-rooms.service';
+import { callService } from '../../modules/calls/calls.service';
 import { notificationService } from '../../modules/notifications/notifications.service';
 import { pushService } from '../../modules/push/push.service';
 
@@ -26,6 +27,24 @@ export const notificationWorker = new Worker(
     if (job.name === 'audio-room-reminders-scan') {
       const result = await audioRoomService.sendDueRoomReminders();
       if (result.rooms > 0) logger.info({ jobId: job.id, ...result }, 'Audio room reminders processed');
+      return;
+    }
+
+    if (job.name === 'call-incoming-push') {
+      const { callId } = job.data as { callId: string };
+      await callService.sendIncomingPush(callId);
+      return;
+    }
+
+    if (job.name === 'call-timeout') {
+      const { callId } = job.data as { callId: string };
+      await callService.markMissed(callId);
+      return;
+    }
+
+    if (job.name === 'call-timeout-scan') {
+      const result = await callService.markExpiredRingingCalls();
+      if (result.missed > 0) logger.info({ jobId: job.id, ...result }, 'Expired DM calls marked missed');
       return;
     }
 

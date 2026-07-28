@@ -145,6 +145,24 @@ enum NotificationType {
   ANNOUNCEMENT
   REPORT
   SYSTEM
+  CALL
+}
+
+// 1:1 DM voice/video calls. Ringing state lives here (not Redis) so a server restart mid-ring
+// still ends cleanly via the missed-call scheduler.
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING    // initiated, not yet answered / declined / cancelled
+  ANSWERED   // callee accepted, in call
+  DECLINED   // callee tapped decline
+  MISSED     // rang out (~30s) without an answer
+  ENDED      // one side hung up after ANSWERED
+  CANCELLED  // caller cancelled before callee answered
+  FAILED     // client couldn't join the Agora channel
 }
 
 enum ReportTargetType {
@@ -209,6 +227,8 @@ model User {
   pollVotes             PollVote[]
   reportsFiled          Report[]
   deviceTokens          DeviceToken[]
+  callsMade             Call[]                  @relation("CallsMade")
+  callsReceived         Call[]                  @relation("CallsReceived")
 
   @@index([currentStageId])
   @@index([deletedAt])
@@ -327,6 +347,7 @@ model Channel {
   cluster     Cluster?            @relation(fields: [clusterId], references: [id], onDelete: Cascade)
   memberships ChannelMembership[]
   messages    Message[]
+  calls       Call[]
 
   @@index([branchId])
   @@index([clusterId])
@@ -689,4 +710,32 @@ model Report {
 
   @@index([status, createdAt])
   @@index([targetType, targetId])
+}
+
+// 1:1 call in a DM channel. `agoraChannel` is the RTC channel name — clients build tokens for
+// their own uid via /calls/:id/token so a leaked token can never publish as someone else.
+model Call {
+  id           String     @id @default(cuid())
+  channelId    String     // must be a DM channel
+  callerId     String
+  calleeId     String
+  type         CallType   @default(AUDIO)
+  status       CallStatus @default(RINGING)
+  agoraChannel String     @unique
+
+  createdAt   DateTime  @default(now()) // = "startedAt" (ringing began)
+  answeredAt  DateTime?
+  endedAt     DateTime?
+  endedById   String?   // scalar audit — who hung up (or system for MISSED)
+  durationMs  Int?      // set on end: endedAt - answeredAt (null for MISSED/DECLINED/CANCELLED)
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  caller  User    @relation("CallsMade", fields: [callerId], references: [id], onDelete: Cascade)
+  callee  User    @relation("CallsReceived", fields: [calleeId], references: [id], onDelete: Cascade)
+
+  // Busy check: at most one live (RINGING or ANSWERED) call per user at a time.
+  @@index([callerId, status])
+  @@index([calleeId, status])
+  @@index([channelId, createdAt]) // call history for a DM
+  @@index([status, createdAt])    // sweeper for stuck-RINGING rows
 }

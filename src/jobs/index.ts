@@ -17,6 +17,12 @@ export function startWorkers() {
     .upsertJobScheduler('audio-room-reminders', { every: 5 * 60 * 1000 }, { name: 'audio-room-reminders-scan' })
     .then(() => logger.info('Audio-room-reminder scheduler registered'))
     .catch((err) => logger.error({ err }, 'Failed to register audio-room reminder scheduler'));
+  // Safety net for ringing DM calls. Each call also gets its own delayed timeout job; this scan
+  // catches anything left ringing after a worker restart or failed delayed job.
+  notificationQueue
+    .upsertJobScheduler('call-timeouts', { every: 30 * 1000 }, { name: 'call-timeout-scan' })
+    .then(() => logger.info('Call-timeout scheduler registered'))
+    .catch((err) => logger.error({ err }, 'Failed to register call-timeout scheduler'));
   // Daily janitor: wipes expired OTPs, aged notifications, and stale reminders.
   notificationQueue
     .upsertJobScheduler('janitor', { every: 24 * 60 * 60 * 1000 }, { name: 'janitor-scan' })

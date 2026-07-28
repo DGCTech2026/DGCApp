@@ -4,7 +4,7 @@ import { emitToUser } from '../../infra/realtime';
 import { pushService } from '../push/push.service';
 import { NotFound } from '../../utils/errors';
 
-type NotifType = 'MESSAGE' | 'MENTION' | 'GROWTH' | 'EVENT' | 'REPORT' | 'SYSTEM';
+type NotifType = 'MESSAGE' | 'MENTION' | 'GROWTH' | 'EVENT' | 'ANNOUNCEMENT' | 'REPORT' | 'SYSTEM' | 'CALL';
 
 const SELECT = {
   id: true,
