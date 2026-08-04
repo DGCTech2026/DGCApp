@@ -36,6 +36,9 @@ export const audioRoomController = {
   async raiseHand(req: Request, res: Response) {
     res.json(await audioRoomService.raiseHand(req.user!.sub, req.params.roomId as string));
   },
+  async lowerHand(req: Request, res: Response) {
+    res.json(await audioRoomService.lowerHand(req.user!.sub, req.params.roomId as string));
+  },
   async promote(req: Request, res: Response) {
     res.json(await audioRoomService.promote(
       req.user!.sub, req.user!.role, req.params.roomId as string,

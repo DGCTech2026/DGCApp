@@ -334,6 +334,20 @@ export const audioRoomService = {
     return { ok: true };
   },
 
+  // Mirror of raiseHand: same participant check, opposite broadcast. Hand state is client-side
+  // (a Set the host UI maintains), so we just need to tell everyone the listener took it back.
+  async lowerHand(userId: string, roomId: string) {
+    const p = await prisma.audioRoomParticipant.findFirst({
+      where: { roomId, userId, leftAt: null },
+      select: { id: true, role: true },
+    });
+    if (!p) throw BadRequest('Not in this room');
+    if (p.role !== 'LISTENER') throw BadRequest('Only listeners can lower hand');
+
+    emitToAudioRoom(roomId, 'audio-room:hand-lowered', { roomId, userId });
+    return { ok: true };
+  },
+
   async promote(hostUserId: string, role: string, roomId: string, targetUserId: string, targetRole: 'SPEAKER' | 'LISTENER') {
     const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true } });
     if (!room) throw NotFound('Room not found');

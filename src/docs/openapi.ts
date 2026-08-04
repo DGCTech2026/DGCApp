@@ -995,10 +995,19 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/audio-rooms/{roomId}/raise-hand',
   tags: ['audio-rooms'],
-  summary: 'Raise hand to request speaker role (listeners only)',
+  summary: 'Raise hand to request speaker role (listeners only). Broadcasts audio-room:hand-raised.',
   security: bearer,
   request: { params: z.object({ roomId: z.string() }) },
   responses: { 200: { description: 'Hand raised', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/audio-rooms/{roomId}/raise-hand',
+  tags: ['audio-rooms'],
+  summary: 'Lower a previously raised hand (listeners only). Broadcasts audio-room:hand-lowered.',
+  security: bearer,
+  request: { params: z.object({ roomId: z.string() }) },
+  responses: { 200: { description: 'Hand lowered', ...json(okSchema) } },
 });
 registry.registerPath({
   method: 'post',
@@ -1186,6 +1195,7 @@ const apiDescription = [
   '| `audio-room:user-left` | listen | `{ roomId, userId }` |',
   '| `audio-room:role-changed` | listen | `{ roomId, userId, role }` |',
   '| `audio-room:hand-raised` | listen | `{ roomId, userId }` |',
+  '| `audio-room:hand-lowered` | listen | `{ roomId, userId }` |',
   '| `audio-room:ended` | listen | `{ roomId }` |',
   '| `audio-room:kicked` | listen | `{ roomId }` (sent to the kicked user only) |',
   '| `audio-room:token` | listen | `{ roomId, appId, token, channel, uid }` (sent when promoted to speaker) |',
