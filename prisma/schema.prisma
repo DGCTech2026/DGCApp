@@ -130,6 +130,13 @@ enum AudioRoomStatus {
   ENDED
 }
 
+// AudioRoom variety (PRD §8 + Prayer Watch). PRAYER_WATCH rooms are persistent 24hr rooms
+// hosted in the Prayer Warriors cluster; every user gets a "prayer watch is live" push on start.
+enum AudioRoomType {
+  GENERAL
+  PRAYER_WATCH
+}
+
 // Audio-room roles are EPHEMERAL — tied to the room session, not the user (CLAUDE.md §6.1).
 enum AudioRole {
   HOST
@@ -633,6 +640,10 @@ model AudioRoom {
   clusterId      String?
   hostId         String // scalar audit field
   status         AudioRoomStatus @default(SCHEDULED)
+  // GENERAL rooms auto-end when the host leaves and no speaker remains. PRAYER_WATCH is
+  // persistent — cluster moderators come and go, the room stays up until someone explicitly ends it.
+  type           AudioRoomType   @default(GENERAL)
+  isPersistent   Boolean         @default(false)
   provider       String? // "agora" | "100ms"
   externalRoomId String?
   scheduledFor   DateTime?
@@ -645,6 +656,8 @@ model AudioRoom {
   reminders    AudioRoomReminder[]
 
   @@index([status])
+  // Fast lookup for "is there a live prayer watch right now?" (used by the create path to prevent duplicates).
+  @@index([type, status])
 }
 
 // "Remind Me" on a scheduled room — one row per user per room; fired + cleared when the room goes live.

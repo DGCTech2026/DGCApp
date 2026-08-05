@@ -4,6 +4,7 @@ import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioR
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
+import { canCreateForScope, canModerateScoped } from '../../utils/authorization';
 import { env } from '../../config/env';
 import type { CreateRoomInput, UpdateRoomInput } from './audio-rooms.schema';
 
@@ -37,11 +38,15 @@ function stableUid(userId: string): number {
   return Math.abs(hash) % 2_000_000_000;
 }
 
-const ADMIN_ROLES = ['SUPER_ADMIN', 'BRANCH_ADMIN'];
-
 export const audioRoomService = {
   async create(userId: string, role: string, dto: CreateRoomInput) {
-    if (!ADMIN_ROLES.includes(role)) throw Forbidden('Only admins can create audio rooms');
+    // PRD §3: Super Admin (any room), Branch Admin (their branch), Cluster Moderator (their cluster).
+    // An unscoped room (no branch, no cluster) is super-admin-only.
+    const allowed = await canCreateForScope(userId, role, {
+      branchId: dto.branchId ?? null,
+      clusterId: dto.clusterId ?? null,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to create an audio room in this scope');
 
     const room = await prisma.audioRoom.create({
       data: {
@@ -82,9 +87,15 @@ export const audioRoomService = {
   },
 
   async update(userId: string, role: string, roomId: string, dto: UpdateRoomInput) {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true } });
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, status: true, branchId: true, clusterId: true },
+    });
     if (!room) throw NotFound('Room not found');
-    if (room.hostId !== userId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can update this room');
+    const allowed = await canModerateScoped(userId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to update this room');
     if (room.status === 'ENDED') throw BadRequest('Cannot update an ended room');
 
     return prisma.audioRoom.update({
@@ -217,7 +228,10 @@ export const audioRoomService = {
   async start(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true, title: true, branchId: true, clusterId: true } });
     if (!room) throw NotFound('Room not found');
-    if (room.hostId !== userId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can start this room');
+    const allowed = await canModerateScoped(userId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to start this room');
     if (room.status !== 'SCHEDULED') throw BadRequest('Room is not in SCHEDULED state');
 
     await prisma.audioRoom.update({
@@ -234,10 +248,13 @@ export const audioRoomService = {
   async end(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true },
+      select: { hostId: true, status: true, branchId: true, clusterId: true },
     });
     if (!room) throw NotFound('Room not found');
-    if (room.hostId !== userId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can end this room');
+    const allowed = await canModerateScoped(userId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to end this room');
     if (room.status === 'ENDED') throw BadRequest('Room already ended');
 
     const updated = await prisma.audioRoom.update({
@@ -293,6 +310,12 @@ export const audioRoomService = {
     emitToAudioRoom(roomId, 'audio-room:user-left', { roomId, userId });
 
     if (p.role === 'HOST') {
+      // Persistent rooms (Prayer Watch): host leaving is normal — cluster moderators come and go
+      // over 24hrs. The room stays LIVE and hostless until someone else takes over or a moderator
+      // explicitly ends it. hostId stays as the last known host for audit; role in the room is empty.
+      const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { isPersistent: true } });
+      if (room?.isPersistent) return { ok: true };
+
       const nextSpeaker = await prisma.audioRoomParticipant.findFirst({
         where: { roomId, leftAt: null, role: 'SPEAKER' },
         orderBy: { joinedAt: 'asc' },
@@ -319,6 +342,51 @@ export const audioRoomService = {
         closeAudioRoom(roomId);
       }
     }
+    return { ok: true };
+  },
+
+  // Speaker demotes themselves back to LISTENER. Distinct from promote() because it doesn't
+  // require moderator permission — a speaker can always step down.
+  async stepDown(userId: string, roomId: string) {
+    const p = await prisma.audioRoomParticipant.findFirst({
+      where: { roomId, userId, leftAt: null },
+      select: { id: true, role: true },
+    });
+    if (!p) throw BadRequest('Not in this room');
+    if (p.role !== 'SPEAKER') throw BadRequest('Only speakers can step down');
+
+    await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { role: 'LISTENER' } });
+    emitToAudioRoom(roomId, 'audio-room:role-changed', { roomId, userId, role: 'LISTENER' });
+    // New audience-role token so the client's Agora session updates its publish/subscribe posture.
+    const token = this.issueToken(roomId, userId, 'audience');
+    emitToUser(userId, 'audio-room:token', { roomId, ...token });
+    return { ok: true, ...token };
+  },
+
+  // Moderator mutes a participant. Agora doesn't offer server-forced mute in our tier, so we
+  // broadcast a soft-mute event that the target client is expected to honor by calling
+  // muteLocalAudioStream(true). If a rogue client ignores it, moderators still have kick.
+  // Applies to HOST/SPEAKER (LISTENERs already can't publish).
+  async mute(hostUserId: string, role: string, roomId: string, targetUserId: string) {
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, branchId: true, clusterId: true },
+    });
+    if (!room) throw NotFound('Room not found');
+    const allowed = await canModerateScoped(hostUserId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to mute users in this room');
+
+    const p = await prisma.audioRoomParticipant.findFirst({
+      where: { roomId, userId: targetUserId, leftAt: null },
+      select: { role: true },
+    });
+    if (!p) throw BadRequest('User is not in this room');
+    if (p.role === 'LISTENER') throw BadRequest('Listener has no active mic to mute');
+
+    emitToUser(targetUserId, 'audio-room:muted', { roomId, mutedBy: hostUserId });
+    emitToAudioRoom(roomId, 'audio-room:user-muted', { roomId, userId: targetUserId, mutedBy: hostUserId });
     return { ok: true };
   },
 
@@ -349,10 +417,16 @@ export const audioRoomService = {
   },
 
   async promote(hostUserId: string, role: string, roomId: string, targetUserId: string, targetRole: 'SPEAKER' | 'LISTENER') {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true } });
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, status: true, branchId: true, clusterId: true },
+    });
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
-    if (room.hostId !== hostUserId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can change roles');
+    const allowed = await canModerateScoped(hostUserId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to change roles in this room');
 
     const p = await prisma.audioRoomParticipant.findFirst({
       where: { roomId, userId: targetUserId, leftAt: null },
@@ -378,9 +452,15 @@ export const audioRoomService = {
   },
 
   async kick(hostUserId: string, role: string, roomId: string, targetUserId: string) {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true } });
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, branchId: true, clusterId: true },
+    });
     if (!room) throw NotFound('Room not found');
-    if (room.hostId !== hostUserId && role !== 'SUPER_ADMIN') throw Forbidden('Only the host can remove users');
+    const allowed = await canModerateScoped(hostUserId, role, {
+      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
+    });
+    if (!allowed) throw Forbidden('You do not have permission to remove users from this room');
 
     const p = await prisma.audioRoomParticipant.findFirst({
       where: { roomId, userId: targetUserId, leftAt: null },

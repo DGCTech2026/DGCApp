@@ -13,6 +13,7 @@ import { adminRouter } from './modules/admin/admin.routes';
 import { announcementsRouter } from './modules/announcements/announcements.routes';
 import { audioRoomsRouter } from './modules/audio-rooms/audio-rooms.routes';
 import { bootstrapRouter } from './modules/bootstrap/bootstrap.routes';
+import { prayerWatchRouter } from './modules/prayer-watch/prayer-watch.routes';
 import { callsRouter, dmsRouter } from './modules/calls/calls.routes';
 
 export const router = Router();
@@ -33,3 +34,4 @@ router.use('/notifications', notificationsRouter);
 router.use('/admin', adminRouter);
 router.use('/announcements', announcementsRouter);
 router.use('/audio-rooms', audioRoomsRouter);
+router.use('/prayer-watch', prayerWatchRouter);

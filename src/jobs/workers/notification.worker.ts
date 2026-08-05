@@ -48,6 +48,45 @@ export const notificationWorker = new Worker(
       return;
     }
 
+    // Prayer Watch fan-out: page every registered user (not deleted, not suspended) and push
+    // "Prayer Watch is live — tap to join". Also drops a notification row so it appears in the
+    // in-app notification center. Batched at BATCH so a 100k-user org doesn't OOM.
+    if (job.name === 'prayer-watch-live-fanout') {
+      const { roomId, title, startedById } = job.data as { roomId: string; title: string; startedById: string };
+      const payload = {
+        title: 'Prayer Watch is live',
+        body: `${title} — tap to join the ongoing prayer`,
+        data: { type: 'prayer_watch', notificationType: 'SYSTEM', roomId },
+      };
+      let cursor: string | undefined;
+      let notified = 0;
+      // Keyset paginate over User.id — stable even with concurrent inserts.
+      for (;;) {
+        const users = await prisma.user.findMany({
+          where: {
+            deletedAt: null,
+            suspendedAt: null,
+            id: { ...(cursor ? { gt: cursor } : {}), not: startedById },
+          },
+          orderBy: { id: 'asc' },
+          take: BATCH,
+          select: { id: true },
+        });
+        if (!users.length) break;
+        const ids = users.map((u) => u.id);
+        await prisma.notification.createMany({
+          data: ids.map((userId) => ({ userId, type: 'SYSTEM' as const, ...payload })),
+          skipDuplicates: true,
+        });
+        await pushService.sendToUsers(ids, payload);
+        notified += ids.length;
+        cursor = users[users.length - 1]!.id;
+        if (users.length < BATCH) break;
+      }
+      logger.info({ jobId: job.id, roomId, notified }, 'Prayer Watch fan-out complete');
+      return;
+    }
+
     // Announcement fan-out (§4/§12): one Notification row per channel member, batched so a 10k-member
     // broadcast never blocks the request path. FCM push delivery will hook in here next.
     if (job.name === 'announcement-fanout') {
