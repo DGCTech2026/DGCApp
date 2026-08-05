@@ -138,6 +138,14 @@ async function main() {
     { type: 'GLOBAL_ANNOUNCEMENT', name: 'DGC Global Announcement', isReadOnly: true },
   );
 
+  // Global Prayer Watch: singleton channel; every user is auto-joined during onboarding.
+  // Chat is open (not read-only) — messages behave like any general chat channel. The live
+  // prayer audio call is an AudioRoom with type=PRAYER_WATCH that anyone in this channel can start.
+  await findOrCreateChannel(
+    { type: 'GLOBAL_PRAYER_WATCH' },
+    { type: 'GLOBAL_PRAYER_WATCH', name: 'DGC Global Prayer Watch', description: '24hr prayer — chat here, join the live prayer call anytime.', isReadOnly: false },
+  );
+
   for (const branch of branches) {
     for (const section of BRANCH_SECTIONS) {
       await findOrCreateChannel(

@@ -4,7 +4,7 @@ import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioR
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
-import { canCreateForScope, canModerateScoped } from '../../utils/authorization';
+import { canCreateForScope, canModerateScoped, isClusterModerator } from '../../utils/authorization';
 import { env } from '../../config/env';
 import type { CreateRoomInput, UpdateRoomInput } from './audio-rooms.schema';
 
@@ -36,6 +36,29 @@ function stableUid(userId: string): number {
     hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
   }
   return Math.abs(hash) % 2_000_000_000;
+}
+
+// Moderation gate that layers Prayer Warriors cluster moderators on top of the standard scoped
+// check. The Global Prayer Watch call is a PRAYER_WATCH room with no branchId/clusterId (it lives
+// in the singleton GPW channel), so the generic scoped check would miss cluster moderators — this
+// wrapper consults them explicitly whenever room.type is PRAYER_WATCH.
+const PRAYER_WARRIORS_CLUSTER_SLUG = 'prayer-warriors';
+async function canModerateRoom(
+  userId: string,
+  role: string,
+  room: { hostId: string; branchId: string | null; clusterId: string | null; type: 'GENERAL' | 'PRAYER_WATCH' },
+): Promise<boolean> {
+  if (await canModerateScoped(userId, role, { ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId })) {
+    return true;
+  }
+  if (room.type === 'PRAYER_WATCH') {
+    const prayerWarriors = await prisma.cluster.findUnique({
+      where: { slug: PRAYER_WARRIORS_CLUSTER_SLUG },
+      select: { id: true },
+    });
+    if (prayerWarriors && (await isClusterModerator(userId, prayerWarriors.id))) return true;
+  }
+  return false;
 }
 
 export const audioRoomService = {
@@ -89,12 +112,10 @@ export const audioRoomService = {
   async update(userId: string, role: string, roomId: string, dto: UpdateRoomInput) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true },
+      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
-    const allowed = await canModerateScoped(userId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(userId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to update this room');
     if (room.status === 'ENDED') throw BadRequest('Cannot update an ended room');
 
@@ -226,11 +247,9 @@ export const audioRoomService = {
   },
 
   async start(userId: string, role: string, roomId: string) {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true, title: true, branchId: true, clusterId: true } });
+    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true, title: true, branchId: true, clusterId: true, type: true } });
     if (!room) throw NotFound('Room not found');
-    const allowed = await canModerateScoped(userId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(userId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to start this room');
     if (room.status !== 'SCHEDULED') throw BadRequest('Room is not in SCHEDULED state');
 
@@ -248,12 +267,10 @@ export const audioRoomService = {
   async end(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true },
+      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
-    const allowed = await canModerateScoped(userId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(userId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to end this room');
     if (room.status === 'ENDED') throw BadRequest('Room already ended');
 
@@ -309,13 +326,31 @@ export const audioRoomService = {
     leaveAudioRoom(userId, roomId);
     emitToAudioRoom(roomId, 'audio-room:user-left', { roomId, userId });
 
-    if (p.role === 'HOST') {
-      // Persistent rooms (Prayer Watch): host leaving is normal — cluster moderators come and go
-      // over 24hrs. The room stays LIVE and hostless until someone else takes over or a moderator
-      // explicitly ends it. hostId stays as the last known host for audit; role in the room is empty.
-      const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { isPersistent: true } });
-      if (room?.isPersistent) return { ok: true };
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { isPersistent: true },
+    });
 
+    // Persistent rooms (Prayer Watch call): NO host promotion, NO auto-end on host leave.
+    // The call stays live as long as anyone is on it — moderators come and go, participants
+    // drift in and out. Auto-end fires ONLY when the last active participant leaves.
+    if (room?.isPersistent) {
+      const remaining = await prisma.audioRoomParticipant.count({
+        where: { roomId, leftAt: null },
+      });
+      if (remaining === 0) {
+        await prisma.audioRoom.update({
+          where: { id: roomId },
+          data: { status: 'ENDED', endedAt: new Date() },
+        });
+        emitToAudioRoom(roomId, 'audio-room:ended', { roomId });
+        closeAudioRoom(roomId);
+      }
+      return { ok: true };
+    }
+
+    // Normal rooms: host leaving promotes the next speaker, or ends the room if none.
+    if (p.role === 'HOST') {
       const nextSpeaker = await prisma.audioRoomParticipant.findFirst({
         where: { roomId, leftAt: null, role: 'SPEAKER' },
         orderBy: { joinedAt: 'asc' },
@@ -370,12 +405,10 @@ export const audioRoomService = {
   async mute(hostUserId: string, role: string, roomId: string, targetUserId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, branchId: true, clusterId: true },
+      select: { hostId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
-    const allowed = await canModerateScoped(hostUserId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(hostUserId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to mute users in this room');
 
     const p = await prisma.audioRoomParticipant.findFirst({
@@ -419,13 +452,11 @@ export const audioRoomService = {
   async promote(hostUserId: string, role: string, roomId: string, targetUserId: string, targetRole: 'SPEAKER' | 'LISTENER') {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true },
+      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
-    const allowed = await canModerateScoped(hostUserId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(hostUserId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to change roles in this room');
 
     const p = await prisma.audioRoomParticipant.findFirst({
@@ -454,12 +485,10 @@ export const audioRoomService = {
   async kick(hostUserId: string, role: string, roomId: string, targetUserId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, branchId: true, clusterId: true },
+      select: { hostId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
-    const allowed = await canModerateScoped(hostUserId, role, {
-      ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId,
-    });
+    const allowed = await canModerateRoom(hostUserId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to remove users from this room');
 
     const p = await prisma.audioRoomParticipant.findFirst({

@@ -70,6 +70,10 @@ enum ChannelType {
   BRANCH_SECTION
   CLUSTER
   DM
+  // The singleton "DGC Global Prayer Watch" channel (PRD clarification): every user is auto-joined,
+  // members can chat like any other channel, and any member can start a live PRAYER_WATCH audio call
+  // inside the channel when none is currently live.
+  GLOBAL_PRAYER_WATCH
 }
 
 enum MessageType {

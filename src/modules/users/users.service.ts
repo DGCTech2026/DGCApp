@@ -33,11 +33,12 @@ export async function onboardToBranch(userId: string, branchId: string) {
   }
 
   const branchChannels = await prisma.channel.findMany({ where: { branchId }, select: { id: true } });
-  const globalChannel = await prisma.channel.findFirst({
-    where: { type: 'GLOBAL_ANNOUNCEMENT' },
+  // Every user gets both singleton global channels: Announcement (read-only) and Prayer Watch (open chat + live prayer call).
+  const globalChannels = await prisma.channel.findMany({
+    where: { type: { in: ['GLOBAL_ANNOUNCEMENT', 'GLOBAL_PRAYER_WATCH'] } },
     select: { id: true },
   });
-  const channelIds = [...branchChannels.map((c) => c.id), ...(globalChannel ? [globalChannel.id] : [])];
+  const channelIds = [...branchChannels.map((c) => c.id), ...globalChannels.map((c) => c.id)];
 
   // Two statements (membership + a single createMany), not N round-trips — stays well under the
   // transaction timeout even against a remote DB. skipDuplicates keeps it idempotent.

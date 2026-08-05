@@ -1046,34 +1046,47 @@ registry.registerPath({
   responses: { 200: { description: 'Kicked', ...json(okSchema) } },
 });
 
-// ---- Prayer Watch (PRD §8 + persistent 24hr room clarification) ----
+// ---- Global Prayer Watch (PRD clarification: singleton chat channel + live prayer call) ----
 registry.registerPath({
   method: 'get',
   path: '/api/v1/prayer-watch',
   tags: ['prayer-watch'],
-  summary: 'Return the currently live Prayer Watch room, or null if none. Drives the "Join Prayer Watch" banner on Home.',
+  summary: 'Return the Global Prayer Watch channel id + the currently-live call (or null). Use channelId with the standard channel endpoints for chat messages.',
   security: bearer,
-  responses: { 200: { description: 'Live Prayer Watch or null', ...json(z.object({ live: z.object({ id: z.string(), title: z.string(), hostId: z.string(), startedAt: z.string().nullable() }).nullable() })) } },
+  responses: {
+    200: {
+      description: 'Channel id + live call state',
+      ...json(z.object({
+        channelId: z.string(),
+        live: z.object({ id: z.string(), title: z.string(), hostId: z.string(), startedAt: z.string().nullable(), createdAt: z.string() }).nullable(),
+      })),
+    },
+  },
 });
 registry.registerPath({
   method: 'post',
   path: '/api/v1/prayer-watch/start',
   tags: ['prayer-watch'],
-  summary: 'Start the Prayer Watch (Prayer Warriors cluster moderator or super admin). Idempotent — returns the existing room if one is already live and attaches the caller as HOST. Fires a "Prayer Watch is live" push to every user.',
+  summary: 'Any member starts the Global Prayer Watch call. Idempotent — if one is already live, attaches the caller (as LISTENER by default) and returns the existing room + Agora token. Fires a "Prayer Watch is live" push to every user only when a NEW call is created.',
   security: bearer,
   responses: {
-    201: { description: 'Prayer Watch started (or joined if already live) — includes full room detail + host Agora token + alreadyLive flag', ...json(z.object({}).passthrough()) },
-    403: { description: 'Not a Prayer Warriors moderator', ...json(errorSchema) },
+    201: {
+      description: 'Call started (or joined if already live) — includes full room detail + Agora token (host for the starter, audience for someone joining an ongoing call) + alreadyLive flag',
+      ...json(z.object({}).passthrough()),
+    },
   },
 });
 registry.registerPath({
   method: 'post',
   path: '/api/v1/prayer-watch/{roomId}/end',
   tags: ['prayer-watch'],
-  summary: 'End the Prayer Watch (Prayer Warriors cluster moderator or super admin). Regular participants leaving does NOT end a persistent room.',
+  summary: 'Force-end the Global Prayer Watch call. Prayer Warriors cluster moderator or super admin only. Regular members just leave via /audio-rooms/:id/leave; the call auto-ends when the last participant leaves.',
   security: bearer,
   request: { params: z.object({ roomId: z.string() }) },
-  responses: { 200: { description: 'Ended', ...json(okSchema) } },
+  responses: {
+    200: { description: 'Ended', ...json(okSchema) },
+    403: { description: 'Not a Prayer Warriors moderator or super admin', ...json(errorSchema) },
+  },
 });
 registry.registerPath({
   method: 'post',
@@ -1286,15 +1299,24 @@ const apiDescription = [
   '9. Tokens expire after 1 hour — call `POST /audio-rooms/:id/token` to refresh before expiry.',
   '10. Moderator ends room: `POST /audio-rooms/:id/end` — all participants get `audio-room:ended`.',
   '',
-  '### Prayer Watch (persistent 24hr room)',
+  '### Global Prayer Watch (singleton channel + live prayer call)',
   '',
-  'A special persistent audio room hosted in the Prayer Warriors cluster. Cluster moderators start it, every user is notified via FCM push, and anyone can join. Unlike a general room, it does NOT auto-end when the host leaves — cluster moderators come and go while the room stays live. Only a cluster moderator or super admin can explicitly end it.',
+  '**"DGC Global Prayer Watch"** is a singleton channel every user is auto-joined to during onboarding (alongside "DGC Global Announcement"). Existing users were backfilled. It works as an ordinary chat channel — send messages via the standard `POST /channels/:channelId/messages` — AND members can spin up a live prayer audio call inside it whenever none is currently live.',
   '',
-  '1. Client checks for live Prayer Watch on Home: `GET /api/v1/prayer-watch`. Response `{ live: <room> | null }`.',
-  '2. Cluster moderator starts one: `POST /api/v1/prayer-watch/start`. Idempotent — if already live, returns the existing room and attaches the caller as HOST. Server enqueues a "Prayer Watch is live" push to every registered (non-deleted, non-suspended) user.',
-  '3. Users join with the standard `POST /audio-rooms/:id/join` and everything else in the audio-room flow works identically.',
-  '4. Cluster moderator ends: `POST /api/v1/prayer-watch/:roomId/end`.',
-  '5. Speakers use `POST /audio-rooms/:id/step-down` to hand the mic back voluntarily. Moderators use `mute`/`promote`/`kick` as normal.',
+  '**Call rules:**',
+  '- Any authenticated member can start a call (`POST /prayer-watch/start`). Only one active call at a time — a second Start attaches you to the existing call as a LISTENER instead of creating a duplicate.',
+  '- The call stays live even if the starter leaves. It auto-ends only when the **last** participant leaves.',
+  '- The starter is HOST for the duration they\'re in the call. Prayer Warriors cluster moderators (and super admins) can moderate (mute/promote/kick) regardless of whether they started it, and can force-end via `POST /prayer-watch/:roomId/end`.',
+  '- On start, the server fan-outs a "Prayer Watch is live" FCM push to every non-deleted, non-suspended user.',
+  '',
+  '**Flow:**',
+  '1. Home mount: `GET /api/v1/prayer-watch` → response `{ channelId, live }`. Show a "Join Prayer Watch" banner when `live` is not null.',
+  '2. Member starts a call: `POST /api/v1/prayer-watch/start`. Response includes full room detail + Agora `{appId, token, channel, uid}` (host token) + `alreadyLive: false`.',
+  '3. Another member joins the ongoing call: same `POST /prayer-watch/start`. Response returns the same room + Agora (audience token) + `alreadyLive: true`. (Or they can call `POST /audio-rooms/:id/join` directly if they already know the roomId.)',
+  '4. Chat in the channel: standard `POST /channels/:channelId/messages` using the `channelId` from step 1. Every message shows up in the channel like any general chat.',
+  '5. Member leaves the call: `POST /audio-rooms/:id/leave`. If they were the last one, the call ends and everyone receives `audio-room:ended`.',
+  '6. Prayer Warriors moderator force-ends: `POST /api/v1/prayer-watch/:roomId/end`.',
+  '7. Moderation while live: `promote`, `kick`, `mute`, `step-down` all use the standard audio-room endpoints — Prayer Warriors cluster moderators are recognised automatically for PRAYER_WATCH rooms.',
   '',
   '### Scheduled-room reminders',
   '',
