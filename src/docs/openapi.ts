@@ -345,13 +345,21 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/{channelId}/messages',
   tags: ['chat'],
-  summary: 'Send a message (read-only channels require moderator). Omit replyToId unless replying.',
+  summary: 'Send a message. Supports reply (replyToId), @user mentions (mentions[]), and @everyone (mentionEveryone: true). Response payload includes replyTo preview when replying, so no follow-up fetch is needed.',
   security: bearer,
   request: {
     params: z.object({ channelId: z.string() }),
     body: {
       content: {
-        'application/json': { schema: sendMessageSchema, example: { type: 'TEXT', body: 'Hello everyone' } },
+        'application/json': {
+          schema: sendMessageSchema,
+          examples: {
+            plain: { summary: 'Plain text', value: { type: 'TEXT', body: 'Hello everyone' } },
+            reply: { summary: 'Reply to a message', value: { type: 'TEXT', body: 'Amen!', replyToId: 'cm...' } },
+            mention: { summary: 'Mention specific users', value: { type: 'TEXT', body: '@Kwasu can you lead?', mentions: ['cm...user1', 'cm...user2'] } },
+            everyone: { summary: '@everyone', value: { type: 'TEXT', body: 'All hands — prayer at 5am', mentionEveryone: true } },
+          },
+        },
       },
     },
   },

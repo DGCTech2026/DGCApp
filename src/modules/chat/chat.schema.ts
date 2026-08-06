@@ -6,6 +6,7 @@ export const sendMessageSchema = z.object({
   mediaUrl: z.string().url().optional(),
   replyToId: z.string().optional(),
   mentions: z.array(z.string()).optional(), // user ids to @mention (notified if they're channel members)
+  mentionEveryone: z.boolean().optional().default(false), // @everyone — fan-out MENTION to every non-muted member of the channel
 
   // Contact sharing (type = CONTACT)
   contactName: z.string().min(1).max(200).optional(),

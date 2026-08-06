@@ -42,6 +42,19 @@ const MESSAGE_SELECT = {
   poll: { select: POLL_SELECT },
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
   reactions: { select: { emoji: true, userId: true } },
+  // Reply preview — enough for the client to render "↳ Kwasu: Praying for peace" without a
+  // second fetch. deletedAt lets the UI show "message deleted" for a reply whose parent is gone.
+  replyTo: {
+    select: {
+      id: true,
+      type: true,
+      body: true,
+      mediaUrl: true,
+      senderId: true,
+      deletedAt: true,
+      sender: { select: { id: true, displayName: true } },
+    },
+  },
 };
 
 // Attach a small preview URL (image thumb / video poster) so lists render fast on slow networks.
@@ -162,7 +175,18 @@ export const chatService = {
     }
 
     // @mentions — notify the tagged users who are members of this channel (PRD §7).
-    if (dto.mentions?.length) {
+    // @everyone (mentionEveryone: true) fans out to every non-muted member; the worker resolves
+    // the recipient list against ChannelMembership at fan-out time so it stays fresh.
+    if (dto.mentionEveryone) {
+      await notificationQueue.add('mention-fanout', {
+        channelId,
+        messageId: message.id,
+        senderName: message.sender.displayName ?? 'Someone',
+        body: message.body,
+        everyone: true,
+        excludeUserId: userId,
+      });
+    } else if (dto.mentions?.length) {
       const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
       if (targets.length) {
         await notificationQueue.add('mention-fanout', {

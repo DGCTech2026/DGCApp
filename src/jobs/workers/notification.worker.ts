@@ -169,25 +169,31 @@ export const notificationWorker = new Worker(
       return;
     }
 
-    // @mention notifications — filters targets to actual non-muted channel members.
+    // @mention notifications. Two modes:
+    //   - targets[]  : notify those specific users (filtered to non-muted channel members).
+    //   - everyone   : notify every non-muted member of the channel except the sender.
+    // In both modes the title reflects the mode so the recipient's UI knows how to render it.
     if (job.name === 'mention-fanout') {
-      const { channelId, messageId, senderName, body, targets } = job.data as {
+      const { channelId, messageId, senderName, body, targets, everyone, excludeUserId } = job.data as {
         channelId: string;
         messageId: string;
         senderName: string;
         body: string | null;
-        targets: string[];
+        targets?: string[];
+        everyone?: boolean;
+        excludeUserId?: string;
       };
-      const members = await prisma.channelMembership.findMany({
-        where: { channelId, userId: { in: targets }, mutedAt: null },
-        select: { userId: true },
-      });
+      const where = everyone
+        ? { channelId, mutedAt: null, ...(excludeUserId ? { userId: { not: excludeUserId } } : {}) }
+        : { channelId, userId: { in: targets ?? [] }, mutedAt: null };
+      const members = await prisma.channelMembership.findMany({ where, select: { userId: true } });
+      const title = everyone ? `${senderName} mentioned @everyone` : `${senderName} mentioned you`;
       for (const m of members) {
         await notificationService.notify(m.userId, {
           type: 'MENTION',
-          title: `${senderName} mentioned you`,
+          title,
           body: body ?? '',
-          data: { channelId, messageId },
+          data: { channelId, messageId, everyone: everyone ? 'true' : 'false' },
         });
       }
       return;
