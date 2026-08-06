@@ -7,11 +7,7 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 const emails = [
-  'agrochainapp@gmail.com',
   'samuelolu407@gmail.com',
-  'kalexlumia@gmail.com',
-  'lolumide55@gmail.com',
-  'kinoxplus@gmail.com',
 ];
 
 async function main() {

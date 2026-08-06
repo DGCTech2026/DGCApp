@@ -16,12 +16,19 @@ const prisma = new PrismaClient({ adapter });
 // ---- config data (the pipeline lives here, not in code) ----
 
 const BRANCHES = [
+  // City-scoped branches
   { name: 'DGC Abuja', city: 'Abuja', country: 'Nigeria' },
   { name: 'DGC Lagos', city: 'Lagos', country: 'Nigeria' },
   { name: 'DGC Ibadan', city: 'Ibadan', country: 'Nigeria' },
   { name: 'DGC Port Harcourt', city: 'Port Harcourt', country: 'Nigeria' },
   { name: 'DGC United Kingdom', city: 'London', country: 'United Kingdom' },
   { name: 'DGC Australia', city: 'Sydney', country: 'Australia' },
+  // Continental branches — for members not tied to a specific city.
+  { name: 'DGC Africa', city: 'Africa', country: 'Africa' },
+  { name: 'DGC Asia', city: 'Asia', country: 'Asia' },
+  { name: 'DGC Europe', city: 'Europe', country: 'Europe' },
+  { name: 'DGC North America', city: 'North America', country: 'North America' },
+  { name: 'DGC South America', city: 'South America', country: 'South America' },
 ];
 
 const BRANCH_SECTIONS = [
