@@ -8,28 +8,34 @@ export const clusterService = {
   // The catalogue (names + counts) is cached and shared; isMember is merged live per caller.
   async list(userId: string) {
     const [clusters, mine] = await Promise.all([
-      cached(cacheKeys.clusters, 60, async () => {
-        const rows = await prisma.cluster.findMany({
-          where: { archivedAt: null },
-          orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            description: true,
-            isDefault: true,
-            _count: { select: { memberships: true } },
-          },
-        });
-        return rows.map((c) => ({
-          id: c.id,
-          slug: c.slug,
-          name: c.name,
-          description: c.description,
-          isDefault: c.isDefault,
-          memberCount: c._count.memberships,
-        }));
-      }),
+      cached(
+        cacheKeys.clusters,
+        60,
+        async () => {
+          const rows = await prisma.cluster.findMany({
+            where: { archivedAt: null },
+            orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+            select: {
+              id: true,
+              slug: true,
+              name: true,
+              description: true,
+              isDefault: true,
+              _count: { select: { memberships: true } },
+            },
+          });
+          return rows.map((c) => ({
+            id: c.id,
+            slug: c.slug,
+            name: c.name,
+            description: c.description,
+            isDefault: c.isDefault,
+            memberCount: c._count.memberships,
+          }));
+        },
+        // Same reason as branches: catalogue should never legitimately be empty; don't cache empty.
+        { skipCacheIfEmpty: true },
+      ),
       prisma.clusterMembership.findMany({ where: { userId }, select: { clusterId: true } }),
     ]);
     const mineSet = new Set(mine.map((m) => m.clusterId));

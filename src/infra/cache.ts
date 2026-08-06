@@ -7,11 +7,24 @@ import { logger } from './logger';
 //      fall back to the loader, so a Redis outage degrades to DB speed instead of hanging.
 //   2. Per-user fields (myRole, isMuted, presence, isMember) are NEVER cached — callers cache
 //      the shared payload and merge user-specific bits live.
-export async function cached<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
+export async function cached<T>(
+  key: string,
+  ttlSeconds: number,
+  load: () => Promise<T>,
+  opts?: { skipCacheIfEmpty?: boolean },
+): Promise<T> {
   const hit = await withDeadline(redis.get(key), 300, null);
   if (hit !== null) {
     try {
-      return JSON.parse(hit) as T;
+      const parsed = JSON.parse(hit) as T;
+      // Poisoned-cache safeguard: if the cached value is empty AND the caller opted into
+      // skip-if-empty, ignore the cached entry and re-fetch. Also delete it so it can't come
+      // back on the next read. Guards against a brief empty DB response getting stuck for 300s.
+      if (opts?.skipCacheIfEmpty && isEmpty(parsed)) {
+        redis.del(key).catch(() => {});
+      } else {
+        return parsed;
+      }
     } catch {
       // corrupt entry — fall through to the loader, which overwrites it
     }
@@ -19,10 +32,19 @@ export async function cached<T>(key: string, ttlSeconds: number, load: () => Pro
   const fresh = await load();
   // Fire-and-forget: the response must not wait on the cache write. If Redis is briefly down,
   // ioredis queues the command and flushes it on reconnect.
-  redis.set(key, JSON.stringify(fresh), 'EX', ttlSeconds).catch((err) => {
-    logger.warn({ err, key }, 'cache write failed');
-  });
+  if (!opts?.skipCacheIfEmpty || !isEmpty(fresh)) {
+    redis.set(key, JSON.stringify(fresh), 'EX', ttlSeconds).catch((err) => {
+      logger.warn({ err, key }, 'cache write failed');
+    });
+  }
   return fresh;
+}
+
+function isEmpty(value: unknown): boolean {
+  if (value == null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value as object).length === 0;
+  return false;
 }
 
 export async function invalidate(...keys: string[]) {
