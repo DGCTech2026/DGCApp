@@ -1,5 +1,9 @@
 import { prisma } from '../../infra/db';
-import { joinAudioRoom, emitToAudioRoom, closeAudioRoom } from '../../infra/realtime';
+import { joinAudioRoom, emitToAudioRoom, emitToUser, closeAudioRoom } from '../../infra/realtime';
+import { notificationQueue } from '../../infra/queue';
+import { audioRoomService } from '../audio-rooms/audio-rooms.service';
+import { isClusterModerator } from '../../utils/authorization';
+import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
 
 // Shape must match audio-rooms.service.PARTICIPANT_SELECT so all clients render the same fields.
 const PARTICIPANT_SELECT = {
@@ -9,10 +13,6 @@ const PARTICIPANT_SELECT = {
   joinedAt: true,
   user: { select: { id: true, displayName: true, avatarUrl: true } },
 } as const;
-import { notificationQueue } from '../../infra/queue';
-import { audioRoomService } from '../audio-rooms/audio-rooms.service';
-import { isClusterModerator } from '../../utils/authorization';
-import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
 
 // PRD clarification: Global Prayer Watch is a singleton channel every user is auto-joined to.
 // It works as an ordinary chat channel PLUS members can spin up a live prayer audio call inside
@@ -31,17 +31,24 @@ async function findGlobalPrayerWatchChannel() {
   return channel;
 }
 
-// Force-end permission: super admin, or a moderator of the Prayer Warriors cluster.
-// A regular member never force-ends — they just leave, and the room auto-ends when the last
-// participant leaves.
-async function requireForceEndPermission(userId: string, role: string) {
-  if (role === 'SUPER_ADMIN') return;
+// Boolean check: is this user a Prayer Watch moderator? Super admins always count; otherwise
+// they must be a MODERATOR of the Prayer Warriors cluster. Used for both force-end and the
+// "auto-promote on join" logic in start().
+async function isPrayerWatchModerator(userId: string, role: string): Promise<boolean> {
+  if (role === 'SUPER_ADMIN') return true;
   const cluster = await prisma.cluster.findUnique({
     where: { slug: PRAYER_WARRIORS_CLUSTER_SLUG },
     select: { id: true },
   });
-  if (!cluster) throw NotFound('Prayer Warriors cluster is not configured');
-  if (!(await isClusterModerator(userId, cluster.id))) {
+  if (!cluster) return false;
+  return isClusterModerator(userId, cluster.id);
+}
+
+// Force-end permission: super admin, or a moderator of the Prayer Warriors cluster.
+// A regular member never force-ends — they just leave, and the room auto-ends when the last
+// participant leaves.
+async function requireForceEndPermission(userId: string, role: string) {
+  if (!(await isPrayerWatchModerator(userId, role))) {
     throw Forbidden('Only Prayer Warriors moderators or super admins can force-end the Prayer Watch call');
   }
 }
@@ -64,34 +71,52 @@ export const prayerWatchService = {
   },
 
   // Any authenticated user (they're all members of the GPW channel) can start a call — but only
-  // when none is currently live. If a call is already live, we attach the caller as a LISTENER
-  // (so their client can join without duplicating state) and return the same room + audience token.
-  async start(userId: string, _role: string) {
+  // when none is currently live. If a call is already live, we attach the caller (as SPEAKER
+  // if they're a Prayer Warriors moderator so they can barge in and speak, else as LISTENER)
+  // and return the existing room + the appropriate Agora token.
+  async start(userId: string, role: string) {
     await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
+    const isMod = await isPrayerWatchModerator(userId, role);
 
     const existing = await findLiveRoom();
     if (existing) {
-      // Attach caller if not already in the room; return the existing room + audience token.
       const p = await prisma.audioRoomParticipant.findFirst({
         where: { roomId: existing.id, userId, leftAt: null },
         select: { id: true, role: true },
       });
       let participantRole: 'HOST' | 'SPEAKER' | 'LISTENER';
       if (!p) {
+        // Fresh join: moderators land as SPEAKER (can speak immediately), everyone else as LISTENER.
+        const joinRole: 'SPEAKER' | 'LISTENER' = isMod ? 'SPEAKER' : 'LISTENER';
         const created = await prisma.audioRoomParticipant.create({
-          data: { roomId: existing.id, userId, role: 'LISTENER' },
+          data: { roomId: existing.id, userId, role: joinRole },
           select: PARTICIPANT_SELECT,
         });
         joinAudioRoom(userId, existing.id);
         // Notify everyone else in the room that this user just joined — mirrors the standard
         // audio-rooms.join() flow. Without this the host never sees the new listener appear.
         emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
-        participantRole = 'LISTENER';
+        participantRole = joinRole;
+      } else if (isMod && p.role === 'LISTENER') {
+        // Already in the room as a listener AND now recognized as a moderator — upgrade so
+        // they can speak. Broadcasts role-changed so other clients render the change; a token
+        // event will follow via issueToken below (their client renews the Agora token).
+        await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { role: 'SPEAKER' } });
+        emitToAudioRoom(existing.id, 'audio-room:role-changed', {
+          roomId: existing.id, userId, role: 'SPEAKER',
+        });
+        participantRole = 'SPEAKER';
       } else {
         participantRole = p.role;
       }
-      const detail = await audioRoomService.get(userId, existing.id);
       const agoraRole = participantRole === 'LISTENER' ? 'audience' : 'host';
+      // Push a fresh publisher token to the moderator's client via socket so they can renew
+      // Agora without an extra REST call (matches the promote() flow).
+      if (participantRole !== 'LISTENER') {
+        const token = audioRoomService.issueToken(existing.id, userId, 'host');
+        emitToUser(userId, 'audio-room:token', { roomId: existing.id, ...token });
+      }
+      const detail = await audioRoomService.get(userId, existing.id);
       return {
         ...detail,
         agora: audioRoomService.issueToken(existing.id, userId, agoraRole),
