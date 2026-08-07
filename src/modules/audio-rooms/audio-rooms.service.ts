@@ -3,6 +3,9 @@ import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
 import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
+import { redis, withDeadline } from '../../infra/redis';
+import { logger } from '../../infra/logger';
+import { getBulkPresence } from '../chat/chat.socket';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
 import { canCreateForScope, canModerateScoped } from '../../utils/authorization';
 import { env } from '../../config/env';
@@ -628,5 +631,69 @@ export const audioRoomService = {
       await prisma.audioRoom.update({ where: { id: room.id }, data: { reminderSentAt: new Date() } });
     }
     return { rooms: rooms.length, notified };
+  },
+
+  // Phantom-participant sweep for persistent rooms (Prayer Watch). Runs on a scheduler; marks
+  // participants whose user has been offline for > presence TTL as "left" so the room's list
+  // eventually reflects reality without needing every client to call /leave explicitly. If a
+  // room ends up empty after the sweep, close it (same rule as the last-participant-leaves
+  // branch in leave()).
+  //
+  // Safety: we abort if Redis isn't confidently answering, because a false "everyone offline"
+  // read would sweep the entire room. Presence is authoritative only when Redis is healthy.
+  async sweepPhantomParticipants() {
+    const ping = await withDeadline(redis.ping(), 500, null as string | null);
+    if (ping !== 'PONG') {
+      return { skipped: 'redis-unhealthy', rooms: 0, swept: 0, ended: 0 };
+    }
+
+    const rooms = await prisma.audioRoom.findMany({
+      where: { status: 'LIVE', isPersistent: true },
+      select: { id: true },
+    });
+    if (!rooms.length) return { rooms: 0, swept: 0, ended: 0 };
+
+    const roomIds = rooms.map((r) => r.id);
+    const participants = await prisma.audioRoomParticipant.findMany({
+      where: { roomId: { in: roomIds }, leftAt: null },
+      select: { id: true, userId: true, roomId: true },
+    });
+    if (!participants.length) return { rooms: rooms.length, swept: 0, ended: 0 };
+
+    const userIds = [...new Set(participants.map((p) => p.userId))];
+    const presence = await getBulkPresence(userIds);
+    const stale = participants.filter((p) => presence[p.userId] === 'offline');
+    if (!stale.length) return { rooms: rooms.length, swept: 0, ended: 0 };
+
+    await prisma.audioRoomParticipant.updateMany({
+      where: { id: { in: stale.map((p) => p.id) } },
+      data: { leftAt: new Date() },
+    });
+
+    // Emit user-left per stale participant so live observers reconcile their UI.
+    for (const p of stale) {
+      emitToAudioRoom(p.roomId, 'audio-room:user-left', { roomId: p.roomId, userId: p.userId });
+    }
+
+    // Any room now empty → end it (persistent-room rule from leave()).
+    let ended = 0;
+    const affectedRoomIds = [...new Set(stale.map((p) => p.roomId))];
+    for (const roomId of affectedRoomIds) {
+      const remaining = await prisma.audioRoomParticipant.count({
+        where: { roomId, leftAt: null },
+      });
+      if (remaining === 0) {
+        await prisma.audioRoom.update({
+          where: { id: roomId },
+          data: { status: 'ENDED', endedAt: new Date() },
+        });
+        emitToAudioRoom(roomId, 'audio-room:ended', { roomId });
+        closeAudioRoom(roomId);
+        ended += 1;
+      }
+    }
+
+    logger.info({ rooms: rooms.length, swept: stale.length, ended }, 'Phantom participant sweep complete');
+    return { rooms: rooms.length, swept: stale.length, ended };
   },
 };

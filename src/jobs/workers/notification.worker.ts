@@ -30,6 +30,15 @@ export const notificationWorker = new Worker(
       return;
     }
 
+    // Scheduled scan: mark participants as left when their user has been offline for > 120s (the
+    // presence TTL). Applies only to persistent rooms (Prayer Watch) since non-persistent rooms
+    // clean up naturally when the host leaves. Ends the room when the last participant is swept.
+    if (job.name === 'audio-room-phantom-sweep') {
+      const result = await audioRoomService.sweepPhantomParticipants();
+      if (result.swept && result.swept > 0) logger.info({ jobId: job.id, ...result }, 'Phantom sweep swept participants');
+      return;
+    }
+
     if (job.name === 'call-incoming-push') {
       const { callId } = job.data as { callId: string };
       await callService.sendIncomingPush(callId);

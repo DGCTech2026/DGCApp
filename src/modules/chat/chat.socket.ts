@@ -77,6 +77,36 @@ export function registerSocketHandlers(io: Server) {
       displayName = user?.displayName ?? null;
       for (const m of memberships) socket.join(`channel:${m.channelId}`);
       for (const r of audioRooms) socket.join(`audio-room:${r.roomId}`);
+
+      // Catch-up state: for every active audio room the user is a participant in, emit the
+      // current live participant list to THIS socket. Guards against the socket-reconnect race
+      // where a user-joined event fires during the ~200-500ms window between the handshake
+      // completing and this handler joining the audio-room socket room — that event would
+      // otherwise be missed forever, leaving the observer with a stale participant list.
+      if (audioRooms.length) {
+        const roomIds = audioRooms.map((r) => r.roomId);
+        const participants = await prisma.audioRoomParticipant.findMany({
+          where: { roomId: { in: roomIds }, leftAt: null },
+          select: {
+            id: true,
+            roomId: true,
+            userId: true,
+            role: true,
+            joinedAt: true,
+            user: { select: { id: true, displayName: true, avatarUrl: true } },
+          },
+          orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+        });
+        const byRoom = new Map<string, typeof participants>();
+        for (const p of participants) {
+          const arr = byRoom.get(p.roomId) ?? [];
+          arr.push(p);
+          byRoom.set(p.roomId, arr);
+        }
+        for (const roomId of roomIds) {
+          socket.emit('audio-room:state', { roomId, participants: byRoom.get(roomId) ?? [] });
+        }
+      }
     } catch (err) {
       logger.error({ err, userId }, 'Failed to join channel rooms');
     }

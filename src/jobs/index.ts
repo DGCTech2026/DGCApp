@@ -23,6 +23,13 @@ export function startWorkers() {
     .upsertJobScheduler('call-timeouts', { every: 30 * 1000 }, { name: 'call-timeout-scan' })
     .then(() => logger.info('Call-timeout scheduler registered'))
     .catch((err) => logger.error({ err }, 'Failed to register call-timeout scheduler'));
+  // Phantom-participant sweep for persistent audio rooms (Prayer Watch). Combined with the
+  // 120s presence TTL, users who leave the app without calling /leave are cleaned up in
+  // roughly 2-5 minutes. Skips itself if Redis is unhealthy (safety guard).
+  notificationQueue
+    .upsertJobScheduler('audio-room-phantom-sweep', { every: 3 * 60 * 1000 }, { name: 'audio-room-phantom-sweep' })
+    .then(() => logger.info('Audio-room phantom-sweep scheduler registered'))
+    .catch((err) => logger.error({ err }, 'Failed to register phantom-sweep scheduler'));
   // Daily janitor: wipes expired OTPs, aged notifications, and stale reminders.
   notificationQueue
     .upsertJobScheduler('janitor', { every: 24 * 60 * 60 * 1000 }, { name: 'janitor-scan' })
