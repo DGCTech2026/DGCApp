@@ -1,5 +1,14 @@
 import { prisma } from '../../infra/db';
 import { joinAudioRoom, emitToAudioRoom, closeAudioRoom } from '../../infra/realtime';
+
+// Shape must match audio-rooms.service.PARTICIPANT_SELECT so all clients render the same fields.
+const PARTICIPANT_SELECT = {
+  id: true,
+  userId: true,
+  role: true,
+  joinedAt: true,
+  user: { select: { id: true, displayName: true, avatarUrl: true } },
+} as const;
 import { notificationQueue } from '../../infra/queue';
 import { audioRoomService } from '../audio-rooms/audio-rooms.service';
 import { isClusterModerator } from '../../utils/authorization';
@@ -69,10 +78,14 @@ export const prayerWatchService = {
       });
       let participantRole: 'HOST' | 'SPEAKER' | 'LISTENER';
       if (!p) {
-        await prisma.audioRoomParticipant.create({
+        const created = await prisma.audioRoomParticipant.create({
           data: { roomId: existing.id, userId, role: 'LISTENER' },
+          select: PARTICIPANT_SELECT,
         });
         joinAudioRoom(userId, existing.id);
+        // Notify everyone else in the room that this user just joined — mirrors the standard
+        // audio-rooms.join() flow. Without this the host never sees the new listener appear.
+        emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
         participantRole = 'LISTENER';
       } else {
         participantRole = p.role;
