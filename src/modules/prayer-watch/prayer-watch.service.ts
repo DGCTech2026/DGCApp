@@ -31,10 +31,9 @@ async function findGlobalPrayerWatchChannel() {
   return channel;
 }
 
-// Boolean check: is this user a Prayer Watch moderator? Super admins always count; otherwise
-// they must be a MODERATOR of the Prayer Warriors cluster. Used for both force-end and the
-// "auto-promote on join" logic in start().
-async function isPrayerWatchModerator(userId: string, role: string): Promise<boolean> {
+// Force-end permission: NARROW — super admin, or a moderator of the Prayer Warriors cluster
+// specifically. Force-ending kicks everyone off the call so it stays a small trusted group.
+async function canForceEndPrayerWatch(userId: string, role: string): Promise<boolean> {
   if (role === 'SUPER_ADMIN') return true;
   const cluster = await prisma.cluster.findUnique({
     where: { slug: PRAYER_WARRIORS_CLUSTER_SLUG },
@@ -44,13 +43,23 @@ async function isPrayerWatchModerator(userId: string, role: string): Promise<boo
   return isClusterModerator(userId, cluster.id);
 }
 
-// Force-end permission: super admin, or a moderator of the Prayer Warriors cluster.
-// A regular member never force-ends — they just leave, and the room auto-ends when the last
-// participant leaves.
 async function requireForceEndPermission(userId: string, role: string) {
-  if (!(await isPrayerWatchModerator(userId, role))) {
+  if (!(await canForceEndPrayerWatch(userId, role))) {
     throw Forbidden('Only Prayer Warriors moderators or super admins can force-end the Prayer Watch call');
   }
+}
+
+// Auto-promote-on-join permission: BROAD — any user with ANY admin/moderator title in the app.
+// Prayer Watch is org-wide, so we don't require the caller be a mod of the Prayer Warriors
+// cluster specifically. Super admin, ANY branch admin, ANY cluster moderator all qualify and
+// land as SPEAKER with a publisher token instead of LISTENER on join.
+async function canSpeakOnPrayerWatchJoin(userId: string, role: string): Promise<boolean> {
+  if (role === 'SUPER_ADMIN') return true;
+  const [branchAdmin, clusterMod] = await Promise.all([
+    prisma.branchMembership.findFirst({ where: { userId, role: 'ADMIN' }, select: { userId: true } }),
+    prisma.clusterMembership.findFirst({ where: { userId, role: 'MODERATOR' }, select: { userId: true } }),
+  ]);
+  return !!(branchAdmin || clusterMod);
 }
 
 async function findLiveRoom() {
@@ -76,7 +85,7 @@ export const prayerWatchService = {
   // and return the existing room + the appropriate Agora token.
   async start(userId: string, role: string) {
     await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
-    const isMod = await isPrayerWatchModerator(userId, role);
+    const isMod = await canSpeakOnPrayerWatchJoin(userId, role);
 
     const existing = await findLiveRoom();
     if (existing) {

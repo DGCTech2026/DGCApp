@@ -28,7 +28,7 @@ export const audioRoomController = {
     res.json(await audioRoomService.end(req.user!.sub, req.user!.role, req.params.roomId as string));
   },
   async join(req: Request, res: Response) {
-    res.json(await audioRoomService.join(req.user!.sub, req.params.roomId as string));
+    res.json(await audioRoomService.join(req.user!.sub, req.user!.role, req.params.roomId as string));
   },
   async leave(req: Request, res: Response) {
     res.json(await audioRoomService.leave(req.user!.sub, req.params.roomId as string));

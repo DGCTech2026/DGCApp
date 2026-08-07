@@ -289,8 +289,11 @@ export const audioRoomService = {
     return updated;
   },
 
-  async join(userId: string, roomId: string) {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { id: true, status: true } });
+  async join(userId: string, role: string, roomId: string) {
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { id: true, status: true, hostId: true, branchId: true, clusterId: true, type: true },
+    });
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
 
@@ -299,8 +302,16 @@ export const audioRoomService = {
     });
     if (existing) throw BadRequest('Already in this room');
 
+    // Anyone with moderation power over this room (super admin, room host, branch admin for
+    // the room's branch, cluster mod for the room's cluster, Prayer Warriors mod for a
+    // PRAYER_WATCH room) auto-joins as SPEAKER with a publisher token so they can speak
+    // immediately. Regular members join as LISTENER and can raise hand to be promoted.
+    const canModerate = await canModerateRoom(userId, role, room);
+    const joinRole: 'SPEAKER' | 'LISTENER' = canModerate ? 'SPEAKER' : 'LISTENER';
+    const agoraRole: 'host' | 'audience' = canModerate ? 'host' : 'audience';
+
     const participant = await prisma.audioRoomParticipant.create({
-      data: { roomId, userId, role: 'LISTENER' },
+      data: { roomId, userId, role: joinRole },
       select: PARTICIPANT_SELECT,
     });
 
@@ -308,7 +319,7 @@ export const audioRoomService = {
     joinAudioRoom(userId, roomId);
 
     const detail = await this.get(userId, roomId);
-    return { ...detail, agora: this.issueToken(roomId, userId, 'audience') };
+    return { ...detail, agora: this.issueToken(roomId, userId, agoraRole) };
   },
 
   async leave(userId: string, roomId: string) {
