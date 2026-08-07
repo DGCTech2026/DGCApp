@@ -49,19 +49,6 @@ async function requireForceEndPermission(userId: string, role: string) {
   }
 }
 
-// Auto-promote-on-join permission: BROAD — any user with ANY admin/moderator title in the app.
-// Prayer Watch is org-wide, so we don't require the caller be a mod of the Prayer Warriors
-// cluster specifically. Super admin, ANY branch admin, ANY cluster moderator all qualify and
-// land as SPEAKER with a publisher token instead of LISTENER on join.
-async function canSpeakOnPrayerWatchJoin(userId: string, role: string): Promise<boolean> {
-  if (role === 'SUPER_ADMIN') return true;
-  const [branchAdmin, clusterMod] = await Promise.all([
-    prisma.branchMembership.findFirst({ where: { userId, role: 'ADMIN' }, select: { userId: true } }),
-    prisma.clusterMembership.findFirst({ where: { userId, role: 'MODERATOR' }, select: { userId: true } }),
-  ]);
-  return !!(branchAdmin || clusterMod);
-}
-
 async function findLiveRoom() {
   return prisma.audioRoom.findFirst({
     where: { type: 'PRAYER_WATCH', status: 'LIVE' },
@@ -79,13 +66,14 @@ export const prayerWatchService = {
     return { channelId: channel.id, live };
   },
 
-  // Any authenticated user (they're all members of the GPW channel) can start a call — but only
-  // when none is currently live. If a call is already live, we attach the caller (as SPEAKER
-  // if they're a Prayer Warriors moderator so they can barge in and speak, else as LISTENER)
-  // and return the existing room + the appropriate Agora token.
-  async start(userId: string, role: string) {
+  // Any authenticated user can start a call — but only when none is currently live. If a call
+  // is already live, we attach the caller. Prayer Watch is Telegram-voice-chat style: every
+  // participant is a SPEAKER by default, with a publisher Agora token, and can unmute and
+  // speak immediately. There is no LISTENER role in a Prayer Watch call. Admins/moderators
+  // can KICK disruptive participants (see audio-rooms.service.kick — canModerateRoom broadened
+  // for PRAYER_WATCH to include any admin/mod).
+  async start(userId: string, _role: string) {
     await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
-    const isMod = await canSpeakOnPrayerWatchJoin(userId, role);
 
     const existing = await findLiveRoom();
     if (existing) {
@@ -93,44 +81,29 @@ export const prayerWatchService = {
         where: { roomId: existing.id, userId, leftAt: null },
         select: { id: true, role: true },
       });
-      let participantRole: 'HOST' | 'SPEAKER' | 'LISTENER';
       if (!p) {
-        // Fresh join: moderators land as SPEAKER (can speak immediately), everyone else as LISTENER.
-        const joinRole: 'SPEAKER' | 'LISTENER' = isMod ? 'SPEAKER' : 'LISTENER';
+        // Fresh join → SPEAKER for everyone.
         const created = await prisma.audioRoomParticipant.create({
-          data: { roomId: existing.id, userId, role: joinRole },
+          data: { roomId: existing.id, userId, role: 'SPEAKER' },
           select: PARTICIPANT_SELECT,
         });
         joinAudioRoom(userId, existing.id);
-        // Notify everyone else in the room that this user just joined — mirrors the standard
-        // audio-rooms.join() flow. Without this the host never sees the new listener appear.
         emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
-        participantRole = joinRole;
-      } else if (isMod && p.role === 'LISTENER') {
-        // Already in the room as a listener AND now recognized as a moderator — upgrade so
-        // they can speak. Broadcasts role-changed so other clients render the change; a token
-        // event will follow via issueToken below (their client renews the Agora token).
+      } else if (p.role === 'LISTENER') {
+        // Transitional: anyone already in the room as a LISTENER (from a previous deploy's
+        // rules) is upgraded to SPEAKER on their next rejoin so they can speak.
         await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { role: 'SPEAKER' } });
         emitToAudioRoom(existing.id, 'audio-room:role-changed', {
           roomId: existing.id, userId, role: 'SPEAKER',
         });
-        participantRole = 'SPEAKER';
-      } else {
-        participantRole = p.role;
       }
-      const agoraRole = participantRole === 'LISTENER' ? 'audience' : 'host';
-      // Push a fresh publisher token to the moderator's client via socket so they can renew
-      // Agora without an extra REST call (matches the promote() flow).
-      if (participantRole !== 'LISTENER') {
-        const token = audioRoomService.issueToken(existing.id, userId, 'host');
-        emitToUser(userId, 'audio-room:token', { roomId: existing.id, ...token });
-      }
+      // Everyone in Prayer Watch is a publisher — always issue a host-role Agora token.
+      const token = audioRoomService.issueToken(existing.id, userId, 'host');
+      // Push the fresh token through the socket too, so a mid-call upgrade renews without an
+      // extra REST call — client can just engine.renewToken().
+      emitToUser(userId, 'audio-room:token', { roomId: existing.id, ...token });
       const detail = await audioRoomService.get(userId, existing.id);
-      return {
-        ...detail,
-        agora: audioRoomService.issueToken(existing.id, userId, agoraRole),
-        alreadyLive: true,
-      };
+      return { ...detail, agora: token, alreadyLive: true };
     }
 
     // No live call — create one. Starter is HOST; room is persistent so it survives the starter

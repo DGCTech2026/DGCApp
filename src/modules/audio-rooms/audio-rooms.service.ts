@@ -4,7 +4,7 @@ import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioR
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
-import { canCreateForScope, canModerateScoped, isClusterModerator } from '../../utils/authorization';
+import { canCreateForScope, canModerateScoped } from '../../utils/authorization';
 import { env } from '../../config/env';
 import type { CreateRoomInput, UpdateRoomInput } from './audio-rooms.schema';
 
@@ -38,11 +38,12 @@ function stableUid(userId: string): number {
   return Math.abs(hash) % 2_000_000_000;
 }
 
-// Moderation gate that layers Prayer Warriors cluster moderators on top of the standard scoped
-// check. The Global Prayer Watch call is a PRAYER_WATCH room with no branchId/clusterId (it lives
-// in the singleton GPW channel), so the generic scoped check would miss cluster moderators — this
-// wrapper consults them explicitly whenever room.type is PRAYER_WATCH.
-const PRAYER_WARRIORS_CLUSTER_SLUG = 'prayer-warriors';
+// Moderation gate. For general rooms it defers to canModerateScoped (super admin, room host,
+// branch admin for room's branch, cluster mod for room's cluster). For Prayer Watch — which is
+// org-wide with no branch/cluster of its own — it additionally accepts ANY admin/moderator
+// title in the app (any branch admin, any cluster mod). This lets any admin/mod kick a
+// disruptive participant from the Global Prayer Watch call. Force-end stays narrower (Prayer
+// Warriors mod + super admin only, checked separately in prayer-watch.service).
 async function canModerateRoom(
   userId: string,
   role: string,
@@ -52,11 +53,12 @@ async function canModerateRoom(
     return true;
   }
   if (room.type === 'PRAYER_WATCH') {
-    const prayerWarriors = await prisma.cluster.findUnique({
-      where: { slug: PRAYER_WARRIORS_CLUSTER_SLUG },
-      select: { id: true },
-    });
-    if (prayerWarriors && (await isClusterModerator(userId, prayerWarriors.id))) return true;
+    // ANY branch admin OR any cluster moderator counts as a moderator on Prayer Watch.
+    const [branchAdmin, clusterMod] = await Promise.all([
+      prisma.branchMembership.findFirst({ where: { userId, role: 'ADMIN' }, select: { userId: true } }),
+      prisma.clusterMembership.findFirst({ where: { userId, role: 'MODERATOR' }, select: { userId: true } }),
+    ]);
+    if (branchAdmin || clusterMod) return true;
   }
   return false;
 }
@@ -302,13 +304,18 @@ export const audioRoomService = {
     });
     if (existing) throw BadRequest('Already in this room');
 
-    // Anyone with moderation power over this room (super admin, room host, branch admin for
-    // the room's branch, cluster mod for the room's cluster, Prayer Warriors mod for a
-    // PRAYER_WATCH room) auto-joins as SPEAKER with a publisher token so they can speak
-    // immediately. Regular members join as LISTENER and can raise hand to be promoted.
-    const canModerate = await canModerateRoom(userId, role, room);
-    const joinRole: 'SPEAKER' | 'LISTENER' = canModerate ? 'SPEAKER' : 'LISTENER';
-    const agoraRole: 'host' | 'audience' = canModerate ? 'host' : 'audience';
+    // PRAYER_WATCH rooms are Telegram-style: everyone joins as SPEAKER (no LISTENER role at all,
+    // publisher token for everyone). Regular rooms: auto-promote to SPEAKER only if the caller
+    // has moderation power for this scope (super admin, room host, branch admin for the room's
+    // branch, cluster mod for the room's cluster); everyone else joins as LISTENER.
+    let joinRole: 'SPEAKER' | 'LISTENER';
+    if (room.type === 'PRAYER_WATCH') {
+      joinRole = 'SPEAKER';
+    } else {
+      const canModerate = await canModerateRoom(userId, role, room);
+      joinRole = canModerate ? 'SPEAKER' : 'LISTENER';
+    }
+    const agoraRole: 'host' | 'audience' = joinRole === 'LISTENER' ? 'audience' : 'host';
 
     const participant = await prisma.audioRoomParticipant.create({
       data: { roomId, userId, role: joinRole },
