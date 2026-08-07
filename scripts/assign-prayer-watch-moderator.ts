@@ -11,8 +11,7 @@ const pool = new Pool({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 const EMAILS = [
-  'favourgregory40@gmail.com',
-  'graceglobaltech46@gmail.com',
+  'ooreoluwasoneye@gmail.com',
 ].map((e) => e.trim().toLowerCase());
 
 const PRAYER_WARRIORS_SLUG = 'prayer-warriors';
