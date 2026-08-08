@@ -6,11 +6,14 @@ import { openDmSchema } from './channels.schema';
 import { sendMessageSchema } from '../chat/chat.schema';
 import { channelController } from './channels.controller';
 import { chatController } from '../chat/chat.controller';
+import { audioRoomController } from '../audio-rooms/audio-rooms.controller';
 
 export const channelsRouter = Router();
 
 channelsRouter.get('/', authenticate, asyncHandler(channelController.listMine));
 channelsRouter.post('/dm', authenticate, validate(openDmSchema), asyncHandler(channelController.openDm));
+channelsRouter.get('/:channelId/call', authenticate, asyncHandler(audioRoomController.channelCallStatus));
+channelsRouter.post('/:channelId/call/start', authenticate, asyncHandler(audioRoomController.startChannelCall));
 channelsRouter.get('/:channelId', authenticate, asyncHandler(channelController.get));
 channelsRouter.post('/:channelId/read', authenticate, asyncHandler(channelController.markRead));
 channelsRouter.get('/:channelId/members', authenticate, asyncHandler(channelController.members));

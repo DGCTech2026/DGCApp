@@ -13,7 +13,15 @@ export const audioRoomController = {
     res.json(await audioRoomService.list(req.user!.sub, filter, req.query.branchId as string, req.query.clusterId as string));
   },
   async get(req: Request, res: Response) {
-    res.json(await audioRoomService.get(req.user!.sub, req.params.roomId as string));
+    res.json(await audioRoomService.get(req.user!.sub, req.params.roomId as string, req.user!.role));
+  },
+  async channelCallStatus(req: Request, res: Response) {
+    res.json(await audioRoomService.channelCallStatus(req.user!.sub, req.user!.role, req.params.channelId as string));
+  },
+  async startChannelCall(req: Request, res: Response) {
+    res.status(201).json(await audioRoomService.startChannelCall(
+      req.user!.sub, req.user!.role, req.params.channelId as string,
+    ));
   },
   async remind(req: Request, res: Response) {
     res.json(await audioRoomService.remind(req.user!.sub, req.params.roomId as string));
@@ -53,6 +61,11 @@ export const audioRoomController = {
   },
   async mute(req: Request, res: Response) {
     res.json(await audioRoomService.mute(
+      req.user!.sub, req.user!.role, req.params.roomId as string, req.params.userId as string,
+    ));
+  },
+  async unmute(req: Request, res: Response) {
+    res.json(await audioRoomService.unmute(
       req.user!.sub, req.user!.role, req.params.roomId as string, req.params.userId as string,
     ));
   },

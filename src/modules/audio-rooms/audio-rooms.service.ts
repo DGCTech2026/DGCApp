@@ -1,6 +1,6 @@
 import { prisma } from '../../infra/db';
 import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
-import { emitToUser, emitToAudioRoom, joinAudioRoom, leaveAudioRoom, closeAudioRoom } from '../../infra/realtime';
+import { emitToUser, emitToAudioRoom, emitToChannel, joinAudioRoom, leaveAudioRoom, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
 import { pushService } from '../push/push.service';
 import { redis, withDeadline } from '../../infra/redis';
@@ -15,6 +15,7 @@ const ROOM_SELECT = {
   id: true,
   title: true,
   description: true,
+  channelId: true,
   branchId: true,
   clusterId: true,
   hostId: true,
@@ -22,6 +23,17 @@ const ROOM_SELECT = {
   scheduledFor: true,
   startedAt: true,
   endedAt: true,
+  createdAt: true,
+} as const;
+
+const CHANNEL_CALL_RING_TTL_MS = 30_000;
+
+const CHANNEL_CALL_SELECT = {
+  id: true,
+  title: true,
+  channelId: true,
+  hostId: true,
+  startedAt: true,
   createdAt: true,
 } as const;
 
@@ -41,6 +53,26 @@ function stableUid(userId: string): number {
   return Math.abs(hash) % 2_000_000_000;
 }
 
+function isOpenMicRoom(type: 'GENERAL' | 'PRAYER_WATCH' | 'CHANNEL_CALL') {
+  return type === 'PRAYER_WATCH' || type === 'CHANNEL_CALL';
+}
+
+function isChannelModerator(globalRole: string, membershipRole?: string) {
+  return globalRole === 'SUPER_ADMIN' || membershipRole === 'ADMIN' || membershipRole === 'MODERATOR';
+}
+
+function channelDisplayName(channel: {
+  type: string;
+  name: string | null;
+  branch: { name: string } | null;
+  cluster: { name: string } | null;
+}) {
+  if (channel.type === 'BRANCH_SECTION' && channel.branch?.name && channel.name) {
+    return `${channel.branch.name} - ${channel.name}`;
+  }
+  return channel.name ?? channel.cluster?.name ?? channel.branch?.name ?? 'Channel';
+}
+
 // Moderation gate. For general rooms it defers to canModerateScoped (super admin, room host,
 // branch admin for room's branch, cluster mod for room's cluster). For Prayer Watch — which is
 // org-wide with no branch/cluster of its own — it additionally accepts ANY admin/moderator
@@ -50,10 +82,23 @@ function stableUid(userId: string): number {
 async function canModerateRoom(
   userId: string,
   role: string,
-  room: { hostId: string; branchId: string | null; clusterId: string | null; type: 'GENERAL' | 'PRAYER_WATCH' },
+  room: {
+    hostId: string;
+    channelId?: string | null;
+    branchId: string | null;
+    clusterId: string | null;
+    type: 'GENERAL' | 'PRAYER_WATCH' | 'CHANNEL_CALL';
+  },
 ): Promise<boolean> {
   if (await canModerateScoped(userId, role, { ownerId: room.hostId, branchId: room.branchId, clusterId: room.clusterId })) {
     return true;
+  }
+  if (room.channelId) {
+    const membership = await prisma.channelMembership.findUnique({
+      where: { userId_channelId: { userId, channelId: room.channelId } },
+      select: { role: true },
+    });
+    if (membership?.role === 'ADMIN' || membership?.role === 'MODERATOR') return true;
   }
   if (room.type === 'PRAYER_WATCH') {
     // ANY branch admin OR any cluster moderator counts as a moderator on Prayer Watch.
@@ -66,7 +111,157 @@ async function canModerateRoom(
   return false;
 }
 
+async function requireChannelMember(userId: string, role: string, channelId: string) {
+  const channel = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: {
+      id: true,
+      type: true,
+      name: true,
+      isReadOnly: true,
+      branchId: true,
+      clusterId: true,
+      branch: { select: { name: true } },
+      cluster: { select: { name: true } },
+      memberships: {
+        where: { userId },
+        select: { role: true },
+      },
+    },
+  });
+  if (!channel) throw NotFound('Channel not found');
+  if (channel.type === 'DM') throw BadRequest('Use DM calls for direct messages');
+  if (channel.type === 'GLOBAL_PRAYER_WATCH') throw BadRequest('Use /api/v1/prayer-watch/start for Global Prayer Watch');
+
+  const membership = channel.memberships[0] ?? null;
+  if (!membership && role !== 'SUPER_ADMIN') throw Forbidden('You are not a member of this channel');
+  return { channel, membership };
+}
+
+async function requireChannelCallStarter(userId: string, role: string, channelId: string) {
+  const ctx = await requireChannelMember(userId, role, channelId);
+  if (ctx.channel.isReadOnly && !isChannelModerator(role, ctx.membership?.role)) {
+    throw Forbidden('Only moderators can start calls in read-only channels');
+  }
+  return ctx;
+}
+
+function liveChannelCall(channelId: string) {
+  return prisma.audioRoom.findFirst({
+    where: { channelId, type: 'CHANNEL_CALL', status: 'LIVE' },
+    orderBy: [{ startedAt: 'desc' }, { createdAt: 'desc' }],
+    select: CHANNEL_CALL_SELECT,
+  });
+}
+
+function channelIncomingPayload(room: {
+  id: string;
+  title: string;
+  channelId: string | null;
+  hostId: string;
+  createdAt: Date;
+}, channelName: string, starter: { id: string; displayName: string | null; avatarUrl: string | null }) {
+  return {
+    roomId: room.id,
+    channelId: room.channelId,
+    title: room.title,
+    channelName,
+    startedById: starter.id,
+    startedByName: starter.displayName ?? 'Someone',
+    startedByAvatarUrl: starter.avatarUrl,
+    createdAt: room.createdAt,
+    expiresAt: new Date(room.createdAt.getTime() + CHANNEL_CALL_RING_TTL_MS),
+  };
+}
+
 export const audioRoomService = {
+  async channelCallStatus(userId: string, role: string, channelId: string) {
+    await requireChannelMember(userId, role, channelId);
+    return { channelId, live: await liveChannelCall(channelId) };
+  },
+
+  async startChannelCall(userId: string, role: string, channelId: string): Promise<unknown> {
+    const { channel } = await requireChannelCallStarter(userId, role, channelId);
+    const existing = await liveChannelCall(channelId);
+    if (existing) {
+      const p = await prisma.audioRoomParticipant.findFirst({
+        where: { roomId: existing.id, userId, leftAt: null },
+        select: { id: true, role: true },
+      });
+      if (!p) {
+        const created = await prisma.audioRoomParticipant.create({
+          data: { roomId: existing.id, userId, role: 'SPEAKER' },
+          select: PARTICIPANT_SELECT,
+        });
+        joinAudioRoom(userId, existing.id);
+        emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
+      } else if (p.role === 'LISTENER') {
+        await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { role: 'SPEAKER' } });
+        emitToAudioRoom(existing.id, 'audio-room:role-changed', {
+          roomId: existing.id, userId, role: 'SPEAKER',
+        });
+      }
+      const token = this.issueToken(existing.id, userId, 'host');
+      emitToUser(userId, 'audio-room:token', { roomId: existing.id, ...token });
+      const detail = await this.get(userId, existing.id, role);
+      return { ...detail, agora: token, alreadyLive: true };
+    }
+
+    const channelName = channelDisplayName(channel);
+    const starter = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, displayName: true, avatarUrl: true },
+    });
+    if (!starter) throw NotFound('User not found');
+
+    let room;
+    try {
+      room = await prisma.audioRoom.create({
+        data: {
+          title: `${channelName} Call`,
+          description: `Live call in ${channelName}`,
+          channelId,
+          branchId: channel.branchId,
+          clusterId: channel.clusterId,
+          hostId: userId,
+          type: 'CHANNEL_CALL',
+          isPersistent: true,
+          status: 'LIVE',
+          provider: 'agora',
+          startedAt: new Date(),
+          participants: { create: { userId, role: 'HOST' } },
+        },
+        select: CHANNEL_CALL_SELECT,
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === 'P2002') {
+        const raced = await liveChannelCall(channelId);
+        if (raced) return this.startChannelCall(userId, role, channelId);
+      }
+      throw err;
+    }
+
+    joinAudioRoom(userId, room.id);
+    const incoming = channelIncomingPayload(room, channelName, starter);
+    emitToChannel(channelId, 'audio-room:incoming', incoming);
+    await notificationQueue.add(
+      'channel-call-started',
+      {
+        roomId: room.id,
+        channelId,
+        channelName,
+        startedById: userId,
+        startedByName: starter.displayName ?? 'Someone',
+        startedByAvatarUrl: starter.avatarUrl ?? '',
+        createdAt: room.createdAt.toISOString(),
+      },
+      { jobId: `channel-call-started:${room.id}`, removeOnComplete: true, attempts: 3 },
+    );
+
+    const detail = await this.get(userId, room.id, role);
+    return { ...detail, agora: this.issueToken(room.id, userId, 'host'), alreadyLive: false };
+  },
+
   async create(userId: string, role: string, dto: CreateRoomInput) {
     // PRD §3: Super Admin (any room), Branch Admin (their branch), Cluster Moderator (their cluster).
     // An unscoped room (no branch, no cluster) is super-admin-only.
@@ -117,7 +312,7 @@ export const audioRoomService = {
   async update(userId: string, role: string, roomId: string, dto: UpdateRoomInput) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
+      select: { hostId: true, status: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     const allowed = await canModerateRoom(userId, role, room);
@@ -193,7 +388,7 @@ export const audioRoomService = {
   },
 
   // Room detail. All speakers (few), listeners capped at 30 + exact counts for the UI header.
-  async get(userId: string, roomId: string) {
+  async get(userId: string, roomId: string, role = 'MEMBER') {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
       select: {
@@ -207,6 +402,7 @@ export const audioRoomService = {
       },
     });
     if (!room) throw NotFound('Room not found');
+    if (room.channelId) await requireChannelMember(userId, role, room.channelId);
 
     const [listeners, listenerCount] = await Promise.all([
       prisma.audioRoomParticipant.findMany({
@@ -252,7 +448,7 @@ export const audioRoomService = {
   },
 
   async start(userId: string, role: string, roomId: string) {
-    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true, title: true, branchId: true, clusterId: true, type: true } });
+    const room = await prisma.audioRoom.findUnique({ where: { id: roomId }, select: { hostId: true, status: true, title: true, channelId: true, branchId: true, clusterId: true, type: true } });
     if (!room) throw NotFound('Room not found');
     const allowed = await canModerateRoom(userId, role, room);
     if (!allowed) throw Forbidden('You do not have permission to start this room');
@@ -265,14 +461,14 @@ export const audioRoomService = {
 
     joinAudioRoom(userId, roomId);
     await this.notifyRoomStarted(roomId, room.title, room.branchId, room.clusterId, userId);
-    const detail = await this.get(userId, roomId);
+    const detail = await this.get(userId, roomId, role);
     return { ...detail, agora: this.issueToken(roomId, userId, 'host') };
   },
 
   async end(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
+      select: { hostId: true, status: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     const allowed = await canModerateRoom(userId, role, room);
@@ -297,10 +493,11 @@ export const audioRoomService = {
   async join(userId: string, role: string, roomId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { id: true, status: true, hostId: true, branchId: true, clusterId: true, type: true },
+      select: { id: true, status: true, hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
+    if (room.channelId) await requireChannelMember(userId, role, room.channelId);
 
     const existing = await prisma.audioRoomParticipant.findFirst({
       where: { roomId, userId, leftAt: null },
@@ -312,7 +509,7 @@ export const audioRoomService = {
     // has moderation power for this scope (super admin, room host, branch admin for the room's
     // branch, cluster mod for the room's cluster); everyone else joins as LISTENER.
     let joinRole: 'SPEAKER' | 'LISTENER';
-    if (room.type === 'PRAYER_WATCH') {
+    if (isOpenMicRoom(room.type)) {
       joinRole = 'SPEAKER';
     } else {
       const canModerate = await canModerateRoom(userId, role, room);
@@ -328,7 +525,7 @@ export const audioRoomService = {
     emitToAudioRoom(roomId, 'audio-room:user-joined', participant);
     joinAudioRoom(userId, roomId);
 
-    const detail = await this.get(userId, roomId);
+    const detail = await this.get(userId, roomId, role);
     return { ...detail, agora: this.issueToken(roomId, userId, agoraRole) };
   },
 
@@ -426,7 +623,7 @@ export const audioRoomService = {
   async mute(hostUserId: string, role: string, roomId: string, targetUserId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, branchId: true, clusterId: true, type: true },
+      select: { hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     const allowed = await canModerateRoom(hostUserId, role, room);
@@ -441,6 +638,28 @@ export const audioRoomService = {
 
     emitToUser(targetUserId, 'audio-room:muted', { roomId, mutedBy: hostUserId });
     emitToAudioRoom(roomId, 'audio-room:user-muted', { roomId, userId: targetUserId, mutedBy: hostUserId });
+    return { ok: true };
+  },
+
+  async unmute(actorUserId: string, role: string, roomId: string, targetUserId: string) {
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
+    });
+    if (!room) throw NotFound('Room not found');
+
+    const isSelfUnmute = actorUserId === targetUserId;
+    const allowed = isSelfUnmute || (await canModerateRoom(actorUserId, role, room));
+    if (!allowed) throw Forbidden('You do not have permission to unmute users in this room');
+
+    const p = await prisma.audioRoomParticipant.findFirst({
+      where: { roomId, userId: targetUserId, leftAt: null },
+      select: { role: true },
+    });
+    if (!p) throw BadRequest('User is not in this room');
+    if (p.role === 'LISTENER') throw BadRequest('Listener has no active mic to unmute');
+
+    emitToAudioRoom(roomId, 'audio-room:user-unmuted', { roomId, userId: targetUserId });
     return { ok: true };
   },
 
@@ -473,7 +692,7 @@ export const audioRoomService = {
   async promote(hostUserId: string, role: string, roomId: string, targetUserId: string, targetRole: 'SPEAKER' | 'LISTENER') {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, status: true, branchId: true, clusterId: true, type: true },
+      select: { hostId: true, status: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
@@ -506,7 +725,7 @@ export const audioRoomService = {
   async kick(hostUserId: string, role: string, roomId: string, targetUserId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },
-      select: { hostId: true, branchId: true, clusterId: true, type: true },
+      select: { hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
     });
     if (!room) throw NotFound('Room not found');
     const allowed = await canModerateRoom(hostUserId, role, room);

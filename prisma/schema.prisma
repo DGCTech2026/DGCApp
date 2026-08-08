@@ -135,10 +135,12 @@ enum AudioRoomStatus {
 }
 
 // AudioRoom variety (PRD §8 + Prayer Watch). PRAYER_WATCH rooms are persistent 24hr rooms
-// hosted in the Prayer Warriors cluster; every user gets a "prayer watch is live" push on start.
+// hosted in the Prayer Warriors cluster; CHANNEL_CALL rooms are persistent voice chats scoped
+// to one chat channel and ring only that channel's members.
 enum AudioRoomType {
   GENERAL
   PRAYER_WATCH
+  CHANNEL_CALL
 }
 
 // Audio-room roles are EPHEMERAL — tied to the room session, not the user (CLAUDE.md §6.1).
@@ -359,6 +361,7 @@ model Channel {
   memberships ChannelMembership[]
   messages    Message[]
   calls       Call[]
+  audioRooms  AudioRoom[]
 
   @@index([branchId])
   @@index([clusterId])
@@ -640,6 +643,7 @@ model AudioRoom {
   id             String          @id @default(cuid())
   title          String
   description    String?
+  channelId      String?
   branchId       String?
   clusterId      String?
   hostId         String // scalar audit field
@@ -656,10 +660,12 @@ model AudioRoom {
   endedAt        DateTime?
   createdAt      DateTime        @default(now())
 
+  channel      Channel?               @relation(fields: [channelId], references: [id], onDelete: Cascade)
   participants AudioRoomParticipant[]
   reminders    AudioRoomReminder[]
 
   @@index([status])
+  @@index([channelId, status])
   // Fast lookup for "is there a live prayer watch right now?" (used by the create path to prevent duplicates).
   @@index([type, status])
 }

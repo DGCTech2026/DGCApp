@@ -4,6 +4,7 @@ import { growthEngine } from '../growth/growth.engine';
 import { getUserPresence } from '../chat/chat.socket';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import { optimizeAvatar } from '../../utils/cloudinaryUrl';
+import { joinChannelRooms } from '../../infra/realtime';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -54,6 +55,7 @@ export async function onboardToBranch(userId: string, branchId: string) {
   );
   // The joined channels' cached member lists / counts are now stale.
   await invalidate(...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]));
+  joinChannelRooms(userId, channelIds);
   await growthEngine.enqueueRequirement(userId, 'JOIN_BRANCH'); // AUTO (First Timer, §11)
 }
 

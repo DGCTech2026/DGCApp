@@ -4,6 +4,7 @@ import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
 import { getBulkPresence } from '../chat/chat.socket';
 import { cached, cacheKeys } from '../../infra/cache';
 import { thumbUrl } from '../../utils/cloudinaryUrl';
+import { joinChannelRoom } from '../../infra/realtime';
 
 const CHANNEL_SELECT = {
   id: true,
@@ -148,12 +149,19 @@ export const channelService = {
       },
       select: CHANNEL_SELECT,
     });
-    if (existing) return existing;
+    if (existing) {
+      joinChannelRoom(userId, existing.id);
+      joinChannelRoom(otherUserId, existing.id);
+      return existing;
+    }
 
-    return prisma.channel.create({
+    const channel = await prisma.channel.create({
       data: { type: 'DM', memberships: { create: [{ userId }, { userId: otherUserId }] } },
       select: CHANNEL_SELECT,
     });
+    joinChannelRoom(userId, channel.id);
+    joinChannelRoom(otherUserId, channel.id);
+    return channel;
   },
 
   // Channel members (PRD §7 "who's in this group"). Capped page for now — add cursor paging when a

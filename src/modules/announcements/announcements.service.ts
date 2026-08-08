@@ -1,6 +1,6 @@
 import { prisma } from '../../infra/db';
 import { notificationQueue } from '../../infra/queue';
-import { emitToChannel } from '../../infra/realtime';
+import { emitToChannel, joinChannelRoom } from '../../infra/realtime';
 import { Forbidden, NotFound } from '../../utils/errors';
 import type { PostAnnouncementInput } from './announcements.schema';
 
@@ -118,6 +118,7 @@ export const announcementService = {
       create: { userId, channelId, role: 'ADMIN' },
       update: { role: 'ADMIN' },
     });
+    joinChannelRoom(userId, channelId);
     return { ok: true };
   },
 

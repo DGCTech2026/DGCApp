@@ -2,6 +2,7 @@ import { prisma } from '../../infra/db';
 import { NotFound } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
+import { joinChannelRoom, leaveChannelRoom } from '../../infra/realtime';
 
 export const clusterService = {
   // Recommended Clusters list — all active clusters, flagged with whether the user has joined.
@@ -76,6 +77,7 @@ export const clusterService = {
       cacheKeys.clusters,
       ...(channel ? [cacheKeys.channelMembers(channel.id), cacheKeys.channelMeta(channel.id)] : []),
     );
+    if (channel) joinChannelRoom(userId, channel.id);
     await growthEngine.enqueueRequirement(userId, 'JOIN_CLUSTER'); // AUTO (New Member, §11)
     return { ok: true };
   },
@@ -96,6 +98,7 @@ export const clusterService = {
       cacheKeys.clusters,
       ...(channel ? [cacheKeys.channelMembers(channel.id), cacheKeys.channelMeta(channel.id)] : []),
     );
+    if (channel) leaveChannelRoom(userId, channel.id);
     return { ok: true };
   },
 };

@@ -159,4 +159,11 @@ export const pushService = {
     const messages = rows.map((row) => incomingCallMessage(row.token, p));
     await sendTokenMessages(messages).catch((err) => logger.error({ err, userId }, 'incoming call push failed'));
   },
+
+  async sendIncomingCallToUsers(userIds: string[], p: IncomingCallPushPayload) {
+    if (!isPushConfigured() || !userIds.length) return;
+    const rows = await prisma.deviceToken.findMany({ where: { userId: { in: userIds } }, select: { token: true } });
+    const messages = rows.map((row) => incomingCallMessage(row.token, p));
+    await sendTokenMessages(messages).catch((err) => logger.error({ err }, 'incoming group call push failed'));
+  },
 };

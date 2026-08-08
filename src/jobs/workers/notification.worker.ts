@@ -13,6 +13,19 @@ import { pushService } from '../../modules/push/push.service';
 const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 const BATCH = 1000;
 
+function channelDisplayName(channel: {
+  type: string;
+  name: string | null;
+  branch: { name: string } | null;
+  cluster: { name: string } | null;
+} | null) {
+  if (!channel) return 'Channel';
+  if (channel.type === 'BRANCH_SECTION' && channel.branch?.name && channel.name) {
+    return `${channel.branch.name} - ${channel.name}`;
+  }
+  return channel.name ?? channel.cluster?.name ?? channel.branch?.name ?? 'Channel';
+}
+
 export const notificationWorker = new Worker(
   'notification',
   async (job) => {
@@ -54,6 +67,73 @@ export const notificationWorker = new Worker(
     if (job.name === 'call-timeout-scan') {
       const result = await callService.markExpiredRingingCalls();
       if (result.missed > 0) logger.info({ jobId: job.id, ...result }, 'Expired DM calls marked missed');
+      return;
+    }
+
+    if (job.name === 'channel-call-started') {
+      const {
+        roomId,
+        channelId,
+        channelName,
+        startedById,
+        startedByName,
+        startedByAvatarUrl,
+        createdAt,
+      } = job.data as {
+        roomId: string;
+        channelId: string;
+        channelName: string;
+        startedById: string;
+        startedByName: string;
+        startedByAvatarUrl?: string;
+        createdAt: string;
+      };
+      const startedAtMs = Date.parse(createdAt);
+      const expiresAt = new Date(startedAtMs + 30_000);
+      const ttlMs = expiresAt.getTime() - Date.now();
+      if (Number.isNaN(startedAtMs) || ttlMs <= 0) return;
+
+      const room = await prisma.audioRoom.findUnique({
+        where: { id: roomId },
+        select: { status: true, channelId: true, type: true },
+      });
+      if (!room || room.status !== 'LIVE' || room.type !== 'CHANNEL_CALL' || room.channelId !== channelId) return;
+
+      const members = await prisma.channelMembership.findMany({
+        where: {
+          channelId,
+          userId: { not: startedById },
+          mutedAt: null,
+          user: { deletedAt: null, suspendedAt: null },
+        },
+        select: { userId: true },
+      });
+      const userIds = members.map((m) => m.userId);
+      if (!userIds.length) return;
+
+      await pushService.sendIncomingCallToUsers(userIds, {
+        title: channelName,
+        body: `${startedByName} started a group call`,
+        ttlMs,
+        data: {
+          type: 'call',
+          notificationType: 'CALL',
+          callAction: 'incoming',
+          callKind: 'CHANNEL_AUDIO_ROOM',
+          callId: roomId,
+          roomId,
+          channelId,
+          channelName,
+          callType: 'AUDIO',
+          agoraChannel: roomId,
+          callerId: startedById,
+          callerName: startedByName,
+          callerAvatarUrl: startedByAvatarUrl ?? '',
+          createdAt,
+          expiresAt: expiresAt.toISOString(),
+        },
+      });
+      logger.info({ jobId: job.id, roomId, channelId, notified: userIds.length }, 'Channel call ring fan-out complete');
       return;
     }
 
@@ -142,14 +222,31 @@ export const notificationWorker = new Worker(
         senderName: string;
         body: string | null;
       };
-      const members = await prisma.channelMembership.findMany({
-        where: { channelId, userId: { not: senderId }, mutedAt: null },
-        select: { userId: true },
-      });
+      const [members, channel] = await Promise.all([
+        prisma.channelMembership.findMany({
+          where: { channelId, userId: { not: senderId }, mutedAt: null },
+          select: { userId: true },
+        }),
+        prisma.channel.findUnique({
+          where: { id: channelId },
+          select: {
+            type: true,
+            name: true,
+            branch: { select: { name: true } },
+            cluster: { select: { name: true } },
+          },
+        }),
+      ]);
       if (!members.length) return;
+      const channelName = channelDisplayName(channel);
+      const displaySender = senderName || 'Someone';
       await pushService.sendToUsers(
         members.map((m) => m.userId),
-        { title: senderName || 'New message', body: body || 'Sent a message', data: { channelId, messageId } },
+        {
+          title: channelName,
+          body: `${displaySender}: ${body || 'Sent a message'}`,
+          data: { channelId, messageId, channelName, senderName: displaySender },
+        },
       );
       return;
     }
