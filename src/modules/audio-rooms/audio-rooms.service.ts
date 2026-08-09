@@ -50,7 +50,7 @@ function stableUid(userId: string): number {
   for (let i = 0; i < userId.length; i++) {
     hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
   }
-  return Math.abs(hash) % 2_000_000_000;
+  return (Math.abs(hash) % 2_000_000_000) || 1;
 }
 
 function isOpenMicRoom(type: 'GENERAL' | 'PRAYER_WATCH' | 'CHANNEL_CALL') {

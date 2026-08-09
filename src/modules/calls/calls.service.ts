@@ -45,7 +45,7 @@ function stableUid(userId: string): number {
   for (let i = 0; i < userId.length; i++) {
     hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
   }
-  return Math.abs(hash) % 2_000_000_000;
+  return (Math.abs(hash) % 2_000_000_000) || 1;
 }
 
 function displayName(user: { displayName: string | null }) {
@@ -118,9 +118,14 @@ function withAgora(call: CallRecord, viewerId: string) {
   };
 }
 
-function emitToParticipants(call: CallRecord, event: string, payload: unknown) {
-  emitToUser(call.callerId, event, payload);
-  if (call.calleeId !== call.callerId) emitToUser(call.calleeId, event, payload);
+function emitSerializedToParticipants(call: CallRecord, event: string) {
+  emitToUser(call.callerId, event, serializeCall(call, call.callerId));
+  if (call.calleeId !== call.callerId) emitToUser(call.calleeId, event, serializeCall(call, call.calleeId));
+}
+
+function emitWithAgoraToParticipants(call: CallRecord, event: string) {
+  emitToUser(call.callerId, event, withAgora(call, call.callerId));
+  if (call.calleeId !== call.callerId) emitToUser(call.calleeId, event, withAgora(call, call.calleeId));
 }
 
 async function lockUsers(tx: Tx, userIds: string[]) {
@@ -295,7 +300,7 @@ export const callService = {
 
     const answered = await prisma.call.findUnique({ where: { id: callId }, select: CALL_SELECT });
     if (!answered) throw NotFound('Call not found');
-    emitToParticipants(answered, 'call:answered', serializeCall(answered, userId));
+    emitWithAgoraToParticipants(answered, 'call:answered');
     return withAgora(answered, userId);
   },
 
@@ -314,7 +319,7 @@ export const callService = {
 
     const declined = await prisma.call.findUnique({ where: { id: callId }, select: CALL_SELECT });
     if (!declined) throw NotFound('Call not found');
-    emitToParticipants(declined, 'call:declined', serializeCall(declined, userId));
+    emitSerializedToParticipants(declined, 'call:declined');
     return serializeCall(declined, userId);
   },
 
@@ -340,7 +345,7 @@ export const callService = {
 
     const ended = await prisma.call.findUnique({ where: { id: callId }, select: CALL_SELECT });
     if (!ended) throw NotFound('Call not found');
-    emitToParticipants(ended, 'call:ended', serializeCall(ended, userId));
+    emitSerializedToParticipants(ended, 'call:ended');
     return serializeCall(ended, userId);
   },
 
@@ -377,7 +382,7 @@ export const callService = {
 
     const missed = await prisma.call.findUnique({ where: { id: callId }, select: CALL_SELECT });
     if (!missed) return { ok: false, skipped: true };
-    emitToParticipants(missed, 'call:ended', serializeCall(missed, missed.calleeId));
+    emitSerializedToParticipants(missed, 'call:ended');
     await notificationService.notify(missed.calleeId, {
       type: 'CALL',
       title: `Missed ${mediaLabel(missed.type)} call`,

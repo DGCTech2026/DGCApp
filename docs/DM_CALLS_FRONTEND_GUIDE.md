@@ -287,12 +287,12 @@ Frontend behavior:
 Sent to both participants after the callee answers.
 
 ```ts
-DmCall
+CallWithAgora
 ```
 
 Frontend behavior:
 
-- Caller should switch from ringing UI to active call UI.
+- Caller should switch from ringing UI to active call UI and may join Agora with `event.agora` if it did not already join from the start-call REST response.
 - Callee should already be joining Agora from the answer response.
 
 ### `call:declined`
@@ -402,6 +402,15 @@ Always call `POST /calls/:callId/end` when the local user hangs up. Always leave
 
 ## Agora Join Flow
 
+Before joining:
+
+- Request and confirm Android `RECORD_AUDIO` permission.
+- Use the same `appId`, `token`, `channelName`, and numeric `uid` returned in `agora`.
+- For DM calls, use Agora communication mode/profile if your SDK exposes it.
+- Enable audio, unmute local audio, and publish as a broadcaster/host if your SDK is using live-broadcast profile.
+- Do not join with `uid = 0`; use the backend `agora.uid`.
+- Log `onJoinChannelSuccess`, `onUserJoined`, `onUserMuteAudio`, `onRemoteAudioStateChanged`, `onLocalAudioStateChanged`, and token errors while testing.
+
 Caller:
 
 ```ts
@@ -414,6 +423,19 @@ await agora.joinChannel({
   token: call.agora.token,
   channelName: call.agora.channel,
   uid: call.agora.uid,
+});
+```
+
+If the caller waits until the callee answers:
+
+```ts
+socket.on('call:answered', async (call: CallWithAgora) => {
+  await agora.joinChannel({
+    appId: call.agora.appId,
+    token: call.agora.token,
+    channelName: call.agora.channel,
+    uid: call.agora.uid,
+  });
 });
 ```
 
