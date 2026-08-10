@@ -641,6 +641,29 @@ export const audioRoomService = {
     return { ok: true };
   },
 
+  async muteAll(actorUserId: string, role: string, roomId: string) {
+    const room = await prisma.audioRoom.findUnique({
+      where: { id: roomId },
+      select: { hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
+    });
+    if (!room) throw NotFound('Room not found');
+    const allowed = await canModerateRoom(actorUserId, role, room);
+    if (!allowed) throw Forbidden('You do not have permission to mute users in this room');
+
+    const speakers = await prisma.audioRoomParticipant.findMany({
+      where: { roomId, leftAt: null, role: { in: ['SPEAKER', 'HOST'] }, userId: { not: actorUserId } },
+      select: { userId: true },
+    });
+
+    for (const s of speakers) {
+      emitToUser(s.userId, 'audio-room:muted', { roomId, mutedBy: actorUserId });
+    }
+    emitToAudioRoom(roomId, 'audio-room:all-muted', {
+      roomId, mutedBy: actorUserId, userIds: speakers.map((s) => s.userId),
+    });
+    return { ok: true, mutedCount: speakers.length };
+  },
+
   async unmute(actorUserId: string, role: string, roomId: string, targetUserId: string) {
     const room = await prisma.audioRoom.findUnique({
       where: { id: roomId },

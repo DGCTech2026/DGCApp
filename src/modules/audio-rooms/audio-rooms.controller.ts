@@ -59,6 +59,9 @@ export const audioRoomController = {
   async stepDown(req: Request, res: Response) {
     res.json(await audioRoomService.stepDown(req.user!.sub, req.params.roomId as string));
   },
+  async muteAll(req: Request, res: Response) {
+    res.json(await audioRoomService.muteAll(req.user!.sub, req.user!.role, req.params.roomId as string));
+  },
   async mute(req: Request, res: Response) {
     res.json(await audioRoomService.mute(
       req.user!.sub, req.user!.role, req.params.roomId as string, req.params.userId as string,
