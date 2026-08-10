@@ -122,11 +122,11 @@ function incomingCallMessage(token: string, p: IncomingCallPushPayload): TokenMe
 }
 
 export const pushService = {
-  async registerDevice(userId: string, token: string, platform: Platform) {
+  async registerDevice(userId: string, token: string, platform: Platform, voipToken?: string) {
     await prisma.deviceToken.upsert({
       where: { token },
-      create: { userId, token, platform },
-      update: { userId, platform }, // device reused by another account → move the token to this user
+      create: { userId, token, platform, voipToken: voipToken ?? null },
+      update: { userId, platform, voipToken: voipToken ?? undefined },
     });
     return { ok: true };
   },

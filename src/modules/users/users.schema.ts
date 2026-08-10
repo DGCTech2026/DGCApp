@@ -24,9 +24,11 @@ export const updateMeSchema = z
 
 export type UpdateMeInput = z.infer<typeof updateMeSchema>;
 
-// FCM device registration for push notifications.
+// FCM device registration for push notifications. voipToken is the separate APNs VoIP push
+// token iOS clients register via PushKit — used for CallKit incoming-call ringing.
 export const registerDeviceSchema = z.object({
   token: z.string().min(1),
   platform: z.enum(['ANDROID', 'IOS', 'WEB']),
+  voipToken: z.string().min(1).optional(),
 });
 export const removeDeviceSchema = z.object({ token: z.string().min(1) });

@@ -45,12 +45,16 @@ const PARTICIPANT_SELECT = {
   user: { select: { id: true, displayName: true, avatarUrl: true } },
 } as const;
 
-function stableUid(userId: string): number {
+export function stableUid(userId: string): number {
   let hash = 0;
   for (let i = 0; i < userId.length; i++) {
     hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
   }
   return (Math.abs(hash) % 2_000_000_000) || 1;
+}
+
+function withAgoraUid<T extends { userId: string }>(p: T): T & { agoraUid: number } {
+  return { ...p, agoraUid: stableUid(p.userId) };
 }
 
 function isOpenMicRoom(type: 'GENERAL' | 'PRAYER_WATCH' | 'CHANNEL_CALL') {
@@ -194,7 +198,7 @@ export const audioRoomService = {
           select: PARTICIPANT_SELECT,
         });
         joinAudioRoom(userId, existing.id);
-        emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
+        emitToAudioRoom(existing.id, 'audio-room:user-joined', withAgoraUid(created));
       } else if (p.role === 'LISTENER') {
         await prisma.audioRoomParticipant.update({ where: { id: p.id }, data: { role: 'SPEAKER' } });
         emitToAudioRoom(existing.id, 'audio-room:role-changed', {
@@ -302,7 +306,7 @@ export const audioRoomService = {
       speakerCount: participants.length,
       listenerCount: 0,
       totalParticipants: participants.length,
-      speakers: participants,
+      speakers: participants.map(withAgoraUid),
       listeners: [],
       isReminding: false,
       agora: room.status === 'LIVE' ? this.issueToken(room.id, userId, 'host') : null,
@@ -423,8 +427,8 @@ export const audioRoomService = {
       speakerCount,
       listenerCount,
       totalParticipants: speakerCount + listenerCount,
-      speakers: participants,
-      listeners,
+      speakers: participants.map(withAgoraUid),
+      listeners: listeners.map(withAgoraUid),
       isReminding: reminders.length > 0,
     };
   },
@@ -522,7 +526,7 @@ export const audioRoomService = {
       select: PARTICIPANT_SELECT,
     });
 
-    emitToAudioRoom(roomId, 'audio-room:user-joined', participant);
+    emitToAudioRoom(roomId, 'audio-room:user-joined', withAgoraUid(participant));
     joinAudioRoom(userId, roomId);
 
     const detail = await this.get(userId, roomId, role);

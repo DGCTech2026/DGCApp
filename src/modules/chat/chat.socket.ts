@@ -3,6 +3,7 @@ import { verifyAccessToken } from '../../utils/jwt';
 import { prisma } from '../../infra/db';
 import { redis, withDeadline } from '../../infra/redis';
 import { logger } from '../../infra/logger';
+import { stableUid } from '../audio-rooms/audio-rooms.service';
 
 const PRESENCE_TTL = 120; // seconds — refreshed every heartbeat; expires = offline
 const PRESENCE_KEY = (uid: string) => `presence:${uid}`;
@@ -104,7 +105,8 @@ export function registerSocketHandlers(io: Server) {
           byRoom.set(p.roomId, arr);
         }
         for (const roomId of roomIds) {
-          socket.emit('audio-room:state', { roomId, participants: byRoom.get(roomId) ?? [] });
+          const roomParticipants = (byRoom.get(roomId) ?? []).map((p) => ({ ...p, agoraUid: stableUid(p.userId) }));
+          socket.emit('audio-room:state', { roomId, participants: roomParticipants });
         }
       }
     } catch (err) {

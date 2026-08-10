@@ -20,7 +20,7 @@ export const userController = {
   },
 
   async registerDevice(req: Request, res: Response) {
-    res.json(await pushService.registerDevice(req.user!.sub, req.body.token, req.body.platform));
+    res.json(await pushService.registerDevice(req.user!.sub, req.body.token, req.body.platform, req.body.voipToken));
   },
 
   async removeDevice(req: Request, res: Response) {
