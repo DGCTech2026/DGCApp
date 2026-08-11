@@ -1,7 +1,7 @@
 import { prisma } from '../../infra/db';
 import { joinAudioRoom, emitToAudioRoom, emitToUser, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
-import { audioRoomService } from '../audio-rooms/audio-rooms.service';
+import { audioRoomService, stableUid } from '../audio-rooms/audio-rooms.service';
 import { isClusterModerator } from '../../utils/authorization';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
 
@@ -88,7 +88,7 @@ export const prayerWatchService = {
           select: PARTICIPANT_SELECT,
         });
         joinAudioRoom(userId, existing.id);
-        emitToAudioRoom(existing.id, 'audio-room:user-joined', created);
+        emitToAudioRoom(existing.id, 'audio-room:user-joined', { ...created, agoraUid: stableUid(userId) });
       } else if (p.role === 'LISTENER') {
         // Transitional: anyone already in the room as a LISTENER (from a previous deploy's
         // rules) is upgraded to SPEAKER on their next rejoin so they can speak.
