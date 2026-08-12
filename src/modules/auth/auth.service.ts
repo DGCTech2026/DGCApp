@@ -348,6 +348,62 @@ export const authService = {
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
+  // What the "Sign-in methods" screen shows: every provider currently linked + whether a password
+  // is set. hasPassword tells the client whether the password-change flow is available (vs. the
+  // set-password flow). Ordering by createdAt so the UI can show them chronologically.
+  async listAuthProviders(userId: string) {
+    const [providers, user] = await Promise.all([
+      prisma.authProvider.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'asc' },
+        select: { kind: true, createdAt: true, lastUsedAt: true },
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { passwordHash: true, email: true, phoneNumber: true },
+      }),
+    ]);
+    if (!user) throw Unauthorized('Account not found');
+    return {
+      providers,
+      hasPassword: !!user.passwordHash,
+      // Surface the fallbacks the client needs to decide whether unlink is destructive.
+      hasEmail: !!user.email,
+      hasPhone: !!user.phoneNumber,
+    };
+  },
+
+  // Unlink Google/Apple. Guard against lockout: OTP over email or phone is our always-available
+  // fallback, so unlinking a provider is safe as long as the user has at least one of:
+  //   - a password set, OR
+  //   - a verifiable identifier (email or phone) they can receive OTPs on, OR
+  //   - another OAuth link.
+  // Every account we provision satisfies at least (email OR phone), so this guard is mostly a
+  // safety net — but it's the guarantee we want on paper.
+  async unlinkAuthProvider(userId: string, kind: 'GOOGLE' | 'APPLE') {
+    const [link, user, otherLinks] = await Promise.all([
+      prisma.authProvider.findUnique({
+        where: { userId_kind: { userId, kind } },
+        select: { id: true },
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { passwordHash: true, email: true, phoneNumber: true },
+      }),
+      prisma.authProvider.count({ where: { userId, kind: { not: kind } } }),
+    ]);
+    if (!link) throw BadRequest(`${kind} is not linked to this account`);
+    if (!user) throw Unauthorized('Account not found');
+
+    const hasFallback = !!user.passwordHash || !!user.email || !!user.phoneNumber || otherLinks > 0;
+    if (!hasFallback) {
+      throw BadRequest('Cannot unlink your only sign-in method. Set a password first.');
+    }
+
+    await prisma.authProvider.delete({ where: { id: link.id } });
+    return { ok: true };
+  },
+
   async refreshTokens(rawToken: string) {
     let payload: { sub: string; jti?: string };
     try {

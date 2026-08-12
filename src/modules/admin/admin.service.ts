@@ -14,19 +14,50 @@ const BRANCH_SECTIONS = [
 export const adminService = {
   // Dashboard analytics (§13): headline counts + branch + leadership-pipeline breakdowns.
   async analytics() {
-    const [totalUsers, suspendedUsers, byBranch, byStage, totalEvents, totalMessages, branches, stages] =
-      await Promise.all([
-        prisma.user.count({ where: { deletedAt: null } }),
-        prisma.user.count({ where: { suspendedAt: { not: null } } }),
-        prisma.branchMembership.groupBy({ by: ['branchId'], _count: true }),
-        prisma.user.groupBy({ by: ['currentStageId'], _count: true }),
-        prisma.event.count(),
-        prisma.message.count({ where: { deletedAt: null } }),
-        prisma.branch.findMany({ select: { id: true, name: true } }),
-        prisma.growthStage.findMany({ orderBy: { order: 'asc' }, select: { id: true, name: true } }),
-      ]);
+    const [
+      totalUsers,
+      suspendedUsers,
+      byBranch,
+      byStage,
+      totalEvents,
+      totalMessages,
+      branches,
+      stages,
+      googleLinkedUserIds,
+      appleLinkedUserIds,
+    ] = await Promise.all([
+      prisma.user.count({ where: { deletedAt: null } }),
+      prisma.user.count({ where: { suspendedAt: { not: null } } }),
+      prisma.branchMembership.groupBy({ by: ['branchId'], _count: true }),
+      prisma.user.groupBy({ by: ['currentStageId'], _count: true }),
+      prisma.event.count(),
+      prisma.message.count({ where: { deletedAt: null } }),
+      prisma.branch.findMany({ select: { id: true, name: true } }),
+      prisma.growthStage.findMany({ orderBy: { order: 'asc' }, select: { id: true, name: true } }),
+      // Live users linked to Google — set is small enough (thousands) to hold in memory and
+      // gives us the "both providers" intersection without a second grouped query.
+      prisma.authProvider.findMany({
+        where: { kind: 'GOOGLE', user: { deletedAt: null } },
+        select: { userId: true },
+      }),
+      prisma.authProvider.findMany({
+        where: { kind: 'APPLE', user: { deletedAt: null } },
+        select: { userId: true },
+      }),
+    ]);
 
     const branchName = new Map(branches.map((b) => [b.id, b.name]));
+
+    // Sign-in method breakdown: how each live user can currently sign in. A user with BOTH
+    // Google and Apple linked is counted in `both` only, not in google/apple individually, so
+    // the four buckets sum to totalUsers.
+    const googleSet = new Set(googleLinkedUserIds.map((r) => r.userId));
+    const appleSet = new Set(appleLinkedUserIds.map((r) => r.userId));
+    const both = [...googleSet].filter((id) => appleSet.has(id)).length;
+    const googleOnly = googleSet.size - both;
+    const appleOnly = appleSet.size - both;
+    const passwordOrOtpOnly = Math.max(0, totalUsers - googleOnly - appleOnly - both);
+
     return {
       totalUsers,
       suspendedUsers,
@@ -37,6 +68,12 @@ export const adminService = {
         stage: s.name,
         count: byStage.find((r) => r.currentStageId === s.id)?._count ?? 0,
       })),
+      signupMethods: {
+        google: googleOnly,
+        apple: appleOnly,
+        both,
+        passwordOrOtpOnly,
+      },
     };
   },
 

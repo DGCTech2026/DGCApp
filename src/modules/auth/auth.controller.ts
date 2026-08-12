@@ -61,4 +61,13 @@ export const authController = {
     if (req.user) await authService.logout(req.user.sub, req.body.refreshToken);
     res.json({ ok: true });
   },
+
+  async listProviders(req: Request, res: Response) {
+    res.json(await authService.listAuthProviders(req.user!.sub));
+  },
+
+  async unlinkProvider(req: Request, res: Response) {
+    const kind = (req.params.kind as string).toUpperCase() as 'GOOGLE' | 'APPLE';
+    res.json(await authService.unlinkAuthProvider(req.user!.sub, kind));
+  },
 };

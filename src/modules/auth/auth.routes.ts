@@ -71,3 +71,16 @@ authRouter.post('/password', authenticate, validate(setPasswordSchema), asyncHan
 // Tokens
 authRouter.post('/refresh', validate(refreshTokenSchema), asyncHandler(authController.refresh));
 authRouter.post('/logout', authenticate, validate(refreshTokenSchema), asyncHandler(authController.logout));
+
+// Linked OAuth providers (Google/Apple) — power a "Sign-in methods" screen.
+authRouter.get('/providers', authenticate, asyncHandler(authController.listProviders));
+authRouter.delete(
+  '/providers/:kind',
+  authenticate,
+  (req, res, next) => {
+    const k = String(req.params.kind ?? '').toUpperCase();
+    if (k !== 'GOOGLE' && k !== 'APPLE') return res.status(400).json({ error: 'Unknown provider' });
+    next();
+  },
+  asyncHandler(authController.unlinkProvider),
+);
