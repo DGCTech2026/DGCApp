@@ -43,6 +43,11 @@ enum OtpPurpose {
   RESET // password reset (consumed by /auth/reset-password)
 }
 
+enum AuthProviderKind {
+  GOOGLE
+  APPLE
+}
+
 enum DevicePlatform {
   ANDROID
   IOS
@@ -240,6 +245,7 @@ model User {
   pollVotes             PollVote[]
   reportsFiled          Report[]
   deviceTokens          DeviceToken[]
+  authProviders         AuthProvider[]
   callsMade             Call[]                  @relation("CallsMade")
   callsReceived         Call[]                  @relation("CallsReceived")
 
@@ -282,6 +288,25 @@ model DeviceToken {
   createdAt DateTime       @default(now())
   user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+}
+
+// Third-party auth links. providerSubject is the provider's stable user id (Google `sub`, Apple
+// `sub`). Unique per (kind, providerSubject) so no two accounts share the same Google/Apple
+// identity, and unique per (userId, kind) so a user has at most one Google link + one Apple link.
+// Empty table = the account only has password/OTP auth; presence of rows tells us which OAuth
+// providers have been used and lets us support "unlink Google" or per-provider analytics.
+model AuthProvider {
+  id              String           @id @default(cuid())
+  userId          String
+  kind            AuthProviderKind
+  providerSubject String
+  createdAt       DateTime         @default(now())
+  lastUsedAt      DateTime         @default(now())
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, providerSubject])
+  @@unique([userId, kind])
   @@index([userId])
 }
 

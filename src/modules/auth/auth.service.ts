@@ -260,28 +260,91 @@ export const authService = {
       throw Unauthorized('Invalid Google token');
     }
     if (!payload?.email || !payload.email_verified) throw Unauthorized('Google account email not verified');
+    if (!payload.sub) throw Unauthorized('Google token is missing subject');
     const email = norm(payload.email);
-    // Google gives us name + picture — pre-fill them on first signup (don't clobber an existing profile).
-    const { user, isNew } = await ensureUser(
-      { email },
-      { email, displayName: payload.name ?? null, avatarUrl: payload.picture ?? null },
-    );
+    const providerSubject = payload.sub;
+
+    // Prefer matching by Google `sub` first — it's stable across email changes and defends against
+    // a user re-verifying via a different sign-in path with the same email. If no Google link
+    // exists yet, fall back to email match (existing password/OTP account being linked) or create.
+    const existingLink = await prisma.authProvider.findUnique({
+      where: { kind_providerSubject: { kind: 'GOOGLE', providerSubject } },
+      select: { userId: true },
+    });
+    let user;
+    let isNew: boolean;
+    if (existingLink) {
+      const existing = await prisma.user.findUnique({
+        where: { id: existingLink.userId },
+        select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
+      });
+      if (!existing) throw Unauthorized('Account not found');
+      user = existing;
+      isNew = false;
+    } else {
+      const res = await ensureUser(
+        { email },
+        { email, displayName: payload.name ?? null, avatarUrl: payload.picture ?? null },
+      );
+      user = res.user;
+      isNew = res.isNew;
+    }
+
+    // Record/refresh the link. Upsert on (userId, kind): one Google link per user, most-recent
+    // subject wins if the Google account is somehow re-issued (very rare but harmless to handle).
+    await prisma.authProvider.upsert({
+      where: { userId_kind: { userId: user.id, kind: 'GOOGLE' } },
+      create: { userId: user.id, kind: 'GOOGLE', providerSubject },
+      update: { providerSubject, lastUsedAt: new Date() },
+    });
+
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
   async appleAuth(idToken: string) {
     if (!env.APPLE_CLIENT_ID) throw BadRequest('Apple sign-in is not configured');
-    let claims: { email?: string; email_verified?: string | boolean };
+    let claims: { sub?: string; email?: string; email_verified?: string | boolean };
     try {
       claims = await appleSignin.verifyIdToken(idToken, { audience: env.APPLE_CLIENT_ID });
     } catch {
       throw Unauthorized('Invalid Apple token');
     }
-    // Apple only returns email on first authorization; require it to provision the account.
-    // (Apple sends the display name only in the initial client authorization payload, not the ID token.)
-    if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
-    const email = norm(claims.email);
-    const { user, isNew } = await ensureUser({ email }, { email });
+    if (!claims.sub) throw Unauthorized('Apple token is missing subject');
+    const providerSubject = claims.sub;
+
+    // Apple only returns email on first authorization; on subsequent sign-ins the ID token has
+    // no email at all. So we MUST match by `sub` first — that's the only stable identifier every
+    // sign-in carries. Fall back to email lookup (or create) only if this is a first-ever Apple
+    // sign-in for this user.
+    const existingLink = await prisma.authProvider.findUnique({
+      where: { kind_providerSubject: { kind: 'APPLE', providerSubject } },
+      select: { userId: true },
+    });
+    let user;
+    let isNew: boolean;
+    if (existingLink) {
+      const existing = await prisma.user.findUnique({
+        where: { id: existingLink.userId },
+        select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
+      });
+      if (!existing) throw Unauthorized('Account not found');
+      user = existing;
+      isNew = false;
+    } else {
+      // First-time Apple sign-in for this subject → we need the email to provision/link.
+      if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
+      const email = norm(claims.email);
+      const res = await ensureUser({ email }, { email });
+      user = res.user;
+      isNew = res.isNew;
+    }
+
+    await prisma.authProvider.upsert({
+      where: { userId_kind: { userId: user.id, kind: 'APPLE' } },
+      create: { userId: user.id, kind: 'APPLE', providerSubject },
+      update: { providerSubject, lastUsedAt: new Date() },
+    });
+
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
