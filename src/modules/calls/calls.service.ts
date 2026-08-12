@@ -5,6 +5,7 @@ import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
 import { env } from '../../config/env';
 import { emitToUser } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
 import { pushService } from '../push/push.service';
 import { notificationService } from '../notifications/notifications.service';
 import { BadRequest, Conflict, Forbidden, NotFound } from '../../utils/errors';
@@ -241,15 +242,17 @@ export const callService = {
       const incomingPayload = serializeCall(result.call, result.call.calleeId);
       emitToUser(result.call.calleeId, 'call:incoming', incomingPayload);
       emitToUser(result.call.callerId, 'call:ringing', serializeCall(result.call, result.call.callerId));
-      await notificationQueue.add(
+      enqueue(
+        notificationQueue,
         'call-incoming-push',
         { callId: result.call.id },
-        { jobId: `call-incoming:${result.call.id}`, removeOnComplete: true, attempts: 3 },
+        { jobId: `call-incoming-${result.call.id}` },
       );
-      await notificationQueue.add(
+      enqueue(
+        notificationQueue,
         'call-timeout',
         { callId: result.call.id },
-        { delay: CALL_RING_TIMEOUT_MS, jobId: `call-timeout:${result.call.id}`, removeOnComplete: true, attempts: 3 },
+        { delay: CALL_RING_TIMEOUT_MS, jobId: `call-timeout-${result.call.id}` },
       );
     }
 

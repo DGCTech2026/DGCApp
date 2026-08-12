@@ -147,9 +147,19 @@ export const pushService = {
     if (!isPushConfigured() || !userIds.length) return;
     const rows = await prisma.deviceToken.findMany({ where: { userId: { in: userIds } }, select: { token: true } });
     const tokens = rows.map((r) => r.token);
-    for (let i = 0; i < tokens.length; i += 500) {
-      // FCM multicast caps at 500 tokens per call.
-      await sendToTokens(tokens.slice(i, i + 500), p).catch((err) => logger.error({ err }, 'push batch failed'));
+    // FCM multicast caps at 500 tokens per call. Batches ran sequentially before — a 10k-user
+    // fan-out took ~30s (10k / 500 = 20 batches × ~1.5s). Bounded concurrency of 5 cuts that
+    // to ~6s without swamping the single Render instance's HTTP pool. Each batch still swallows
+    // its own error so one FCM failure doesn't abort the whole fan-out.
+    const CONCURRENCY = 5;
+    const batches: string[][] = [];
+    for (let i = 0; i < tokens.length; i += 500) batches.push(tokens.slice(i, i + 500));
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      await Promise.all(
+        batches.slice(i, i + CONCURRENCY).map((batch) =>
+          sendToTokens(batch, p).catch((err) => logger.error({ err }, 'push batch failed')),
+        ),
+      );
     }
   },
 

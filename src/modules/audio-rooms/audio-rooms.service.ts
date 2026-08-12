@@ -2,6 +2,7 @@ import { prisma } from '../../infra/db';
 import { buildRtcToken, isAgoraConfigured } from '../../infra/agora';
 import { emitToUser, emitToAudioRoom, emitToChannel, joinAudioRoom, leaveAudioRoom, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
 import { pushService } from '../push/push.service';
 import { redis, withDeadline } from '../../infra/redis';
 import { logger } from '../../infra/logger';
@@ -248,7 +249,8 @@ export const audioRoomService = {
     joinAudioRoom(userId, room.id);
     const incoming = channelIncomingPayload(room, channelName, starter);
     emitToChannel(channelId, 'audio-room:incoming', incoming);
-    await notificationQueue.add(
+    enqueue(
+      notificationQueue,
       'channel-call-started',
       {
         roomId: room.id,
@@ -259,7 +261,7 @@ export const audioRoomService = {
         startedByAvatarUrl: starter.avatarUrl ?? '',
         createdAt: room.createdAt.toISOString(),
       },
-      { jobId: `channel-call-started:${room.id}`, removeOnComplete: true, attempts: 3 },
+      { jobId: `channel-call-started-${room.id}` },
     );
 
     const detail = await this.get(userId, room.id, role);
@@ -495,17 +497,22 @@ export const audioRoomService = {
   },
 
   async join(userId: string, role: string, roomId: string) {
-    const room = await prisma.audioRoom.findUnique({
-      where: { id: roomId },
-      select: { id: true, status: true, hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
-    });
+    // Parallelize the two independent reads — the room lookup and the "already in room" check
+    // don't depend on each other. Saves one round-trip per join, which matters when 100+ users
+    // hit /join within a few seconds on the single Render instance.
+    const [room, existing] = await Promise.all([
+      prisma.audioRoom.findUnique({
+        where: { id: roomId },
+        select: { id: true, status: true, hostId: true, channelId: true, branchId: true, clusterId: true, type: true },
+      }),
+      prisma.audioRoomParticipant.findFirst({
+        where: { roomId, userId, leftAt: null },
+        select: { id: true },
+      }),
+    ]);
     if (!room) throw NotFound('Room not found');
     if (room.status !== 'LIVE') throw BadRequest('Room is not live');
     if (room.channelId) await requireChannelMember(userId, role, room.channelId);
-
-    const existing = await prisma.audioRoomParticipant.findFirst({
-      where: { roomId, userId, leftAt: null },
-    });
     if (existing) throw BadRequest('Already in this room');
 
     // PRAYER_WATCH rooms are Telegram-style: everyone joins as SPEAKER (no LISTENER role at all,
@@ -814,7 +821,7 @@ export const audioRoomService = {
 
     userIds.delete(hostId);
     if (userIds.size) {
-      await notificationQueue.add('audio-room-started', { roomId, title, userIds: [...userIds] });
+      enqueue(notificationQueue, 'audio-room-started', { roomId, title, userIds: [...userIds] });
     }
     // Reminders are one-shot — clear them once fired.
     if (reminders.length) await prisma.audioRoomReminder.deleteMany({ where: { roomId } });

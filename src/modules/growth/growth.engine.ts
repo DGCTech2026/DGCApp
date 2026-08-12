@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { growthQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
 import { notificationService } from '../notifications/notifications.service';
 import { logger } from '../../infra/logger';
 
@@ -8,8 +9,10 @@ type RequirementSource = 'AUTO' | 'SELF_ATTEST' | 'ADMIN_VERIFY' | 'CERTIFICATE'
 // The growth state machine (CLAUDE.md §6.2). All transition logic lives here, in one place.
 export const growthEngine = {
   // AUTO requirements fire off the request path — enqueue, the worker records + recomputes.
-  async enqueueRequirement(userId: string, requirementKey: string) {
-    await growthQueue.add('complete-requirement', { userId, requirementKey });
+  // Fire-and-forget: a growth stage bump is a side-effect of the user's primary action; a
+  // Redis blip must not fail the caller's write. Worker retries handle transient failures.
+  enqueueRequirement(userId: string, requirementKey: string) {
+    enqueue(growthQueue, 'complete-requirement', { userId, requirementKey });
   },
 
   async completeRequirement(

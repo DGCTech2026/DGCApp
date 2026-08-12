@@ -1,6 +1,8 @@
 import { prisma } from '../../infra/db';
 import { joinAudioRoom, emitToAudioRoom, emitToUser, closeAudioRoom } from '../../infra/realtime';
 import { notificationQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
+import { redis, withDeadline } from '../../infra/redis';
 import { audioRoomService, stableUid } from '../audio-rooms/audio-rooms.service';
 import { isClusterModerator } from '../../utils/authorization';
 import { BadRequest, Forbidden, NotFound } from '../../utils/errors';
@@ -75,8 +77,49 @@ export const prayerWatchService = {
   async start(userId: string, _role: string) {
     await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
 
-    const existing = await findLiveRoom();
+    // Cross-request mutex so two simultaneous starters don't both create a live room. The
+    // check-then-create window at findLiveRoom() → audioRoom.create() is a classic TOCTOU
+    // race — under "everyone tap now" pressure two callers would both see no live room and
+    // both create one, splitting participants across two Agora channels. Lock covers the
+    // check + create; auto-releases at 10s so a crashed request can't wedge the endpoint.
+    const LOCK_KEY = 'lock:prayer-watch:start';
+    let holdsLock = false;
+
+    let existing = await findLiveRoom();
+    if (!existing) {
+      const acquired = await withDeadline(
+        redis.set(LOCK_KEY, userId, 'PX', 10_000, 'NX'),
+        500,
+        null,
+      );
+      holdsLock = acquired === 'OK';
+      if (!holdsLock) {
+        // Another request holds the lock — brief wait, then re-check. The other request
+        // will have created the room by then.
+        await new Promise((r) => setTimeout(r, 400));
+        existing = await findLiveRoom();
+        if (!existing) {
+          // Still nothing — lock holder may have crashed. Fall through and try to acquire
+          // once more with a shorter TTL. If it fails again, give up cleanly.
+          const retryAcquired = await withDeadline(
+            redis.set(LOCK_KEY, userId, 'PX', 10_000, 'NX'),
+            500,
+            null,
+          );
+          holdsLock = retryAcquired === 'OK';
+          if (!holdsLock) throw BadRequest('Another prayer call is being started, please try again');
+        }
+      } else {
+        // We got the lock — re-check inside the lock in case another request created a
+        // room after our first read but before we acquired.
+        existing = await findLiveRoom();
+      }
+    }
+
     if (existing) {
+      if (holdsLock) {
+        redis.del(LOCK_KEY).catch(() => {}); // best-effort release
+      }
       const p = await prisma.audioRoomParticipant.findFirst({
         where: { roomId: existing.id, userId, leftAt: null },
         select: { id: true, role: true },
@@ -109,29 +152,36 @@ export const prayerWatchService = {
     // No live call — create one. Starter is HOST; room is persistent so it survives the starter
     // leaving. isPersistent + type=PRAYER_WATCH together instruct leave() to end the room only
     // when the LAST participant leaves.
-    const room = await prisma.audioRoom.create({
-      data: {
-        title: PRAYER_WATCH_ROOM_TITLE,
-        description: 'Live prayer call in the Global Prayer Watch channel',
-        hostId: userId,
-        type: 'PRAYER_WATCH',
-        isPersistent: true,
-        status: 'LIVE',
-        provider: 'agora',
-        startedAt: new Date(),
-        participants: { create: { userId, role: 'HOST' } },
-      },
-      select: { id: true, title: true },
-    });
+    let room;
+    try {
+      room = await prisma.audioRoom.create({
+        data: {
+          title: PRAYER_WATCH_ROOM_TITLE,
+          description: 'Live prayer call in the Global Prayer Watch channel',
+          hostId: userId,
+          type: 'PRAYER_WATCH',
+          isPersistent: true,
+          status: 'LIVE',
+          provider: 'agora',
+          startedAt: new Date(),
+          participants: { create: { userId, role: 'HOST' } },
+        },
+        select: { id: true, title: true },
+      });
+    } finally {
+      if (holdsLock) redis.del(LOCK_KEY).catch(() => {}); // release ASAP once the row exists
+    }
 
     joinAudioRoom(userId, room.id);
 
     // Fan out "Prayer Watch call is live" push to every registered user (worker pages the User
-    // table). Runs off the request path — starter sees the room instantly.
-    await notificationQueue.add(
+    // table). Fire-and-forget so a Redis blip or BullMQ validation error can't 500 the starter
+    // — the room already exists, the enqueue is a side-effect.
+    enqueue(
+      notificationQueue,
       'prayer-watch-live-fanout',
       { roomId: room.id, title: room.title, startedById: userId },
-      { jobId: `prayer-watch-live:${room.id}`, removeOnComplete: true, attempts: 3 },
+      { jobId: `prayer-watch-live-${room.id}` },
     );
 
     const detail = await audioRoomService.get(userId, room.id);

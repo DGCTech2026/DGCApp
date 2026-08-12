@@ -1,5 +1,6 @@
 import { prisma } from '../../infra/db';
 import { notificationQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
 import { emitToChannel, joinChannelRoom } from '../../infra/realtime';
 import { Forbidden, NotFound } from '../../utils/errors';
 import type { PostAnnouncementInput } from './announcements.schema';
@@ -42,7 +43,7 @@ async function broadcast(channelId: string, userId: string, input: PostAnnouncem
     select: ANNOUNCEMENT_SELECT,
   });
   emitToChannel(channelId, 'message:new', message); // live for members currently connected
-  await notificationQueue.add('announcement-fanout', {
+  enqueue(notificationQueue, 'announcement-fanout', {
     channelId,
     messageId: message.id,
     title: input.title,

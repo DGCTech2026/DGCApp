@@ -1,8 +1,8 @@
 import { prisma } from '../../infra/db';
 import { channelService } from '../channels/channels.service';
 import { notificationQueue } from '../../infra/queue';
+import { enqueue } from '../../infra/enqueue';
 import { emitToChannel } from '../../infra/realtime';
-import { logger } from '../../infra/logger';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import { optimizeImage, thumbUrl } from '../../utils/cloudinaryUrl';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
@@ -162,27 +162,25 @@ export const chatService = {
     const senderName = message.sender.displayName ?? 'Someone';
     const jobBase = { channelId, messageId: message.id, senderId: userId, body: message.body };
     if (channel.type === 'DM') {
-      notificationQueue.add('dm-notify', { ...jobBase, senderName: message.sender.displayName ?? 'New message' })
-        .catch((err) => logger.warn({ err, channelId, messageId: message.id }, 'dm-notify enqueue failed'));
+      enqueue(notificationQueue, 'dm-notify', { ...jobBase, senderName: message.sender.displayName ?? 'New message' });
     } else {
-      notificationQueue.add('message-fanout', { ...jobBase, senderName })
-        .catch((err) => logger.warn({ err, channelId, messageId: message.id }, 'message-fanout enqueue failed'));
+      enqueue(notificationQueue, 'message-fanout', { ...jobBase, senderName });
     }
 
     // @mentions — notify the tagged users who are members of this channel (PRD §7).
     // @everyone (mentionEveryone: true) fans out to every non-muted member; the worker resolves
     // the recipient list against ChannelMembership at fan-out time so it stays fresh.
     if (dto.mentionEveryone) {
-      notificationQueue.add('mention-fanout', {
+      enqueue(notificationQueue, 'mention-fanout', {
         channelId, messageId: message.id, senderName, body: message.body,
         everyone: true, excludeUserId: userId,
-      }).catch((err) => logger.warn({ err, channelId, messageId: message.id }, 'mention-fanout enqueue failed'));
+      });
     } else if (dto.mentions?.length) {
       const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
       if (targets.length) {
-        notificationQueue.add('mention-fanout', {
+        enqueue(notificationQueue, 'mention-fanout', {
           channelId, messageId: message.id, senderName, body: message.body, targets,
-        }).catch((err) => logger.warn({ err, channelId, messageId: message.id }, 'mention-fanout enqueue failed'));
+        });
       }
     }
     return withThumb(message);
