@@ -58,25 +58,23 @@ const STAGES: {
   name: string;
   requirements: { key: string; label: string; type: RequirementType }[];
 }[] = [
+  // Simplified onboarding gate: user uploads a photo of a service they attended. URL landing in
+  // RequirementCompletion.fileUrl auto-completes → recompute → promoted to NEW_MEMBER.
   { key: 'FIRST_TIMER', order: 1, name: 'First Timer', requirements: [
-    { key: 'CREATE_ACCOUNT', label: 'Create account', type: 'AUTO' },
-    { key: 'JOIN_BRANCH', label: 'Join a branch', type: 'AUTO' },
-    { key: 'NEW_MEMBER_FORM', label: 'Complete New Member Form', type: 'SELF_ATTEST' },
-    { key: 'ATTEND_FIRST_SERVICE', label: 'Attend first service', type: 'ADMIN_VERIFY' },
-    { key: 'WATCH_WELCOME_VIDEO', label: 'Watch Welcome Video', type: 'SELF_ATTEST' },
+    { key: 'SERVICE_PHOTO_UPLOADED', label: 'Upload a photo of a service you attended', type: 'URL_UPLOAD' },
   ]},
+  // Attestation letter from the user's unit leader (Cloudinary URL). Same auto-complete pattern.
   { key: 'NEW_MEMBER', order: 2, name: 'New Member', requirements: [
-    { key: 'JOIN_CLUSTER', label: 'Join at least one cluster', type: 'AUTO' },
+    { key: 'UNIT_LEADER_LETTER_UPLOADED', label: 'Upload attestation letter from your unit leader', type: 'URL_UPLOAD' },
   ]},
   { key: 'FOUNDATIONS_GRADUATE', order: 3, name: 'Foundations School Graduate', requirements: [
     { key: 'FOUNDATIONS_CERT_VERIFIED', label: 'Foundations School certificate verified', type: 'CERTIFICATE' },
     { key: 'FOUNDATIONS_ASSESSMENT', label: 'Pass assessment', type: 'ADMIN_VERIFY' },
   ]},
+  // Worker's promotion is gated on the SOM (School of Ministry) certificate. Any super admin
+  // verifies via the existing certificate queue → auto-promotes.
   { key: 'WORKER', order: 4, name: 'Worker', requirements: [
-    { key: 'JOIN_SERVICE_UNIT', label: 'Join a service unit', type: 'AUTO' },
-    { key: 'JOIN_PRAYER_CHAIN', label: 'Join a prayer chain', type: 'AUTO' },
-    { key: 'ATTEND_REGULARLY', label: 'Attend services regularly', type: 'ADMIN_VERIFY' },
-    { key: 'SERVE_MIN_DURATION', label: 'Serve for a minimum duration', type: 'ADMIN_VERIFY' },
+    { key: 'WORKER_SOM_CERT_VERIFIED', label: 'Upload SOM certificate (verified by admin)', type: 'CERTIFICATE' },
   ]},
   { key: 'EMERGING_LEADER', order: 5, name: 'Emerging Leader', requirements: [
     { key: 'SOM_CERT_VERIFIED', label: 'Complete SOM (certificate verified)', type: 'CERTIFICATE' },

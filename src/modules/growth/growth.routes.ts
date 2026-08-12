@@ -3,7 +3,12 @@ import { authenticate } from '../../middleware/authenticate';
 import { requireSuperAdmin } from '../../middleware/authorize';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { submitCertificateSchema, rejectCertificateSchema, adminVerifyRequirementSchema } from './growth.schema';
+import {
+  submitCertificateSchema,
+  rejectCertificateSchema,
+  adminVerifyRequirementSchema,
+  uploadRequirementProofSchema,
+} from './growth.schema';
 import { growthController } from './growth.controller';
 
 export const growthRouter = Router();
@@ -11,6 +16,12 @@ export const growthRouter = Router();
 // Member
 growthRouter.get('/me', authenticate, asyncHandler(growthController.getMine));
 growthRouter.post('/requirements/:key/complete', authenticate, asyncHandler(growthController.selfAttest));
+growthRouter.post(
+  '/requirements/:key/upload',
+  authenticate,
+  validate(uploadRequirementProofSchema),
+  asyncHandler(growthController.uploadRequirementProof),
+);
 growthRouter.post('/certificates', authenticate, validate(submitCertificateSchema), asyncHandler(growthController.submitCertificate));
 growthRouter.get('/certificates', authenticate, asyncHandler(growthController.listMyCertificates));
 

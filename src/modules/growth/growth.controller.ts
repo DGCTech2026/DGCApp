@@ -8,6 +8,11 @@ export const growthController = {
   async selfAttest(req: Request, res: Response) {
     res.json(await growthService.selfAttest(req.user!.sub, req.params.key as string));
   },
+  async uploadRequirementProof(req: Request, res: Response) {
+    res.json(
+      await growthService.uploadRequirementProof(req.user!.sub, req.params.key as string, req.body.fileUrl),
+    );
+  },
   async submitCertificate(req: Request, res: Response) {
     res.status(201).json(await growthService.submitCertificate(req.user!.sub, req.body));
   },

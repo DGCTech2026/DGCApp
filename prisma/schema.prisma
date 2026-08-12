@@ -106,11 +106,15 @@ enum GrowthStageKey {
 }
 
 // How a requirement completion is recorded (see CLAUDE.md §5).
+// URL_UPLOAD = user uploads a file to Cloudinary and posts the URL; the URL itself completes
+// the requirement (no admin review). Used for lightweight proofs like service-attendance photos
+// or unit-leader attestation letters where speed matters more than fraud prevention.
 enum RequirementType {
   AUTO
   SELF_ATTEST
   ADMIN_VERIFY
   CERTIFICATE
+  URL_UPLOAD
 }
 
 enum CertificateStatus {
@@ -556,6 +560,7 @@ model RequirementCompletion {
   requirementId String
   source        RequirementType
   verifiedById  String? // scalar audit field — who admin-verified (if applicable)
+  fileUrl       String? // Cloudinary URL for URL_UPLOAD requirements; the proof itself
   completedAt   DateTime        @default(now())
 
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)

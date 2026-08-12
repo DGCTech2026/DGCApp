@@ -57,6 +57,20 @@ export const growthService = {
     };
   },
 
+  // URL_UPLOAD: user uploaded a proof file to Cloudinary; the URL landing here auto-completes
+  // the requirement (no admin review). Used for service-attendance photo, unit-leader letter,
+  // etc. — anything where the URL itself is enough evidence to advance.
+  async uploadRequirementProof(userId: string, requirementKey: string, fileUrl: string) {
+    const req = await prisma.growthRequirement.findUnique({
+      where: { key: requirementKey },
+      select: { id: true, type: true },
+    });
+    if (!req) throw NotFound('Requirement not found');
+    if (req.type !== 'URL_UPLOAD') throw BadRequest('This requirement does not accept a file upload');
+    await growthEngine.completeRequirementById(userId, req.id, 'URL_UPLOAD', { fileUrl });
+    return this.getMySummary(userId);
+  },
+
   // Member marks a SELF_ATTEST requirement done (e.g. "Watch Welcome Video").
   async selfAttest(userId: string, requirementKey: string) {
     const req = await prisma.growthRequirement.findUnique({
@@ -65,7 +79,7 @@ export const growthService = {
     });
     if (!req) throw NotFound('Requirement not found');
     if (req.type !== 'SELF_ATTEST') throw BadRequest('This requirement cannot be self-attested');
-    await growthEngine.completeRequirementById(userId, req.id, 'SELF_ATTEST');
+    await growthEngine.completeRequirementById(userId, req.id, 'SELF_ATTEST', {});
     return this.getMySummary(userId);
   },
 
@@ -127,7 +141,9 @@ export const growthService = {
       data: { status: 'VERIFIED', verifiedById: adminId, verifiedAt: new Date() },
     });
     if (cert.requirementId) {
-      await growthEngine.completeRequirementById(cert.userId, cert.requirementId, 'CERTIFICATE', adminId);
+      await growthEngine.completeRequirementById(cert.userId, cert.requirementId, 'CERTIFICATE', {
+        verifiedById: adminId,
+      });
     }
     return { ok: true };
   },
@@ -150,7 +166,7 @@ export const growthService = {
     });
     if (!req) throw NotFound('Requirement not found');
     if (req.type !== 'ADMIN_VERIFY') throw BadRequest('This requirement is not admin-verifiable');
-    await growthEngine.completeRequirementById(userId, req.id, 'ADMIN_VERIFY', adminId);
+    await growthEngine.completeRequirementById(userId, req.id, 'ADMIN_VERIFY', { verifiedById: adminId });
     return { ok: true };
   },
 };

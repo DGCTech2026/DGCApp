@@ -6,6 +6,11 @@ export const submitCertificateSchema = z.object({
   fileUrl: z.string().url(),
 });
 
+// URL_UPLOAD requirements accept just a Cloudinary URL — no title, no admin review.
+export const uploadRequirementProofSchema = z.object({
+  fileUrl: z.string().url(),
+});
+
 export const rejectCertificateSchema = z.object({ reason: z.string().max(500).optional() });
 
 export const adminVerifyRequirementSchema = z.object({

@@ -4,7 +4,8 @@ import { enqueue } from '../../infra/enqueue';
 import { notificationService } from '../notifications/notifications.service';
 import { logger } from '../../infra/logger';
 
-type RequirementSource = 'AUTO' | 'SELF_ATTEST' | 'ADMIN_VERIFY' | 'CERTIFICATE';
+type RequirementSource = 'AUTO' | 'SELF_ATTEST' | 'ADMIN_VERIFY' | 'CERTIFICATE' | 'URL_UPLOAD';
+type CompleteOpts = { verifiedById?: string; fileUrl?: string };
 
 // The growth state machine (CLAUDE.md §6.2). All transition logic lives here, in one place.
 export const growthEngine = {
@@ -19,7 +20,7 @@ export const growthEngine = {
     userId: string,
     requirementKey: string,
     source: RequirementSource,
-    verifiedById?: string,
+    opts: CompleteOpts = {},
   ) {
     const requirement = await prisma.growthRequirement.findUnique({
       where: { key: requirementKey },
@@ -29,19 +30,27 @@ export const growthEngine = {
       logger.warn({ requirementKey }, 'completeRequirement: unknown requirement key');
       return;
     }
-    await this.completeRequirementById(userId, requirement.id, source, verifiedById);
+    await this.completeRequirementById(userId, requirement.id, source, opts);
   },
 
   async completeRequirementById(
     userId: string,
     requirementId: string,
     source: RequirementSource,
-    verifiedById?: string,
+    opts: CompleteOpts = {},
   ) {
     await prisma.requirementCompletion.upsert({
       where: { userId_requirementId: { userId, requirementId } },
-      create: { userId, requirementId, source, verifiedById: verifiedById ?? null },
-      update: {}, // already complete — idempotent
+      create: {
+        userId,
+        requirementId,
+        source,
+        verifiedById: opts.verifiedById ?? null,
+        fileUrl: opts.fileUrl ?? null,
+      },
+      // If the user re-uploads a URL_UPLOAD proof (fixed a bad photo), refresh the fileUrl so
+      // the audit trail shows the latest submitted file. Everything else stays fixed.
+      update: opts.fileUrl ? { fileUrl: opts.fileUrl } : {},
     });
     await this.recompute(userId);
   },
@@ -90,14 +99,29 @@ export const growthEngine = {
 
     if (current.id !== user.currentStageId) {
       await prisma.user.update({ where: { id: userId }, data: { currentStageId: current.id } });
+      // If this stage earned a badge, mention it by name so the push actually feels like a reward.
+      // The badge itself was already upserted above; this only shapes the message.
+      const stageBadge = await prisma.badge.findUnique({
+        where: { key: current.key },
+        select: { name: true, icon: true },
+      });
+      const body = stageBadge
+        ? `You've advanced to ${current.name} and earned the ${stageBadge.name} badge ${stageBadge.icon}`
+        : `You've advanced to ${current.name}!`;
+      // notificationService.notify handles both the in-app row (socket + DB) and FCM push in one
+      // call. Best-effort — a push failure must not roll back the advance.
       await notificationService
         .notify(userId, {
           type: 'GROWTH',
-          title: 'Growth milestone',
-          body: `You've advanced to ${current.name}!`,
-          data: { stageKey: current.key },
+          title: `Congratulations — you're now a ${current.name}`,
+          body,
+          data: {
+            stageKey: current.key,
+            stageName: current.name,
+            ...(stageBadge ? { badgeName: stageBadge.name, badgeIcon: stageBadge.icon } : {}),
+          },
         })
-        .catch(() => {}); // notification is best-effort; never fail the transition on it
+        .catch(() => {});
     }
   },
 };
