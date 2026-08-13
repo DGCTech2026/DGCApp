@@ -6,7 +6,7 @@ export const clusterController = {
     res.json(await clusterService.list(req.user!.sub));
   },
   async join(req: Request, res: Response) {
-    res.json(await clusterService.join(req.user!.sub, req.params.clusterId as string));
+    res.json(await clusterService.join(req.user!.sub, req.user!.role, req.params.clusterId as string));
   },
   async leave(req: Request, res: Response) {
     res.json(await clusterService.leave(req.user!.sub, req.params.clusterId as string));

@@ -1,8 +1,14 @@
 import { prisma } from '../../infra/db';
-import { NotFound } from '../../utils/errors';
+import { NotFound, Forbidden } from '../../utils/errors';
 import { growthEngine } from '../growth/growth.engine';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import { joinChannelRoom, leaveChannelRoom } from '../../infra/realtime';
+
+// Minimum growth-stage order a member must be at to opt into a cluster. WORKER is order 4 —
+// they must have gone through First Timer → New Member → Foundations Graduate → Worker first.
+// Rationale: clusters are ministry teams; joining them assumes you've completed the onboarding
+// path. SUPER_ADMIN bypasses this check.
+const MIN_CLUSTER_JOIN_STAGE_ORDER = 4;
 
 export const clusterService = {
   // Recommended Clusters list — all active clusters, flagged with whether the user has joined.
@@ -43,7 +49,24 @@ export const clusterService = {
     return clusters.map((c) => ({ ...c, isMember: mineSet.has(c.id) }));
   },
 
-  async join(userId: string, clusterId: string) {
+  async join(userId: string, role: string, clusterId: string) {
+    // Gate: users must be at WORKER stage (order 4) or higher before joining any cluster.
+    // Super admins bypass. Load the user's currentStage.order once — if they haven't advanced
+    // yet, tell them what to do next in the error message so the frontend can render it verbatim.
+    if (role !== 'SUPER_ADMIN') {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { currentStage: { select: { order: true, name: true } } },
+      });
+      const currentOrder = user?.currentStage?.order ?? 1;
+      if (currentOrder < MIN_CLUSTER_JOIN_STAGE_ORDER) {
+        const currentName = user?.currentStage?.name ?? 'First Timer';
+        throw Forbidden(
+          `You need to reach the Worker stage before joining a cluster. You're currently at ${currentName}. Complete your onboarding steps (upload your service photo and unit-leader letter) and your Foundations School certificate to advance.`,
+        );
+      }
+    }
+
     const cluster = await prisma.cluster.findUnique({
       where: { id: clusterId },
       select: { id: true, archivedAt: true },
