@@ -1,11 +1,15 @@
-// Ensures the growth pipeline in the database exactly matches the new definition:
-//   - All 10 stages exist with correct order/name
+// Ensures the growth pipeline in the database exactly matches the 5-stage definition:
+//   - The 5 expected stages exist with correct order + display name
 //   - Every expected requirement exists and is linked to the right stage
-//   - Any requirement with an unknown key (leftover from the old seed) is deleted
+//   - Any stage or requirement with an unknown key (leftover from the earlier 10-stage draft)
+//     is deleted; user pointers into those deleted stages are nullified first so the FK holds
 //   - Every non-deleted user has their currentStageId recomputed against the corrected pipeline
 //
-// Idempotent. Safe to run repeatedly. Use this after a schema/seed change to production instead
+// Idempotent. Safe to run repeatedly. Use this after any seed change to production instead
 // of running `prisma db seed` (which would also re-touch branches/clusters/channels).
+//
+// Also fixes the corrupted-record case (user with currentStageId pointing at a stage that
+// no longer exists) — the nullify-then-recompute step heals it automatically.
 //
 // Run:  npx tsx -r dotenv/config scripts/ensure-growth-pipeline.ts
 import { PrismaClient } from '@prisma/client';
@@ -17,7 +21,8 @@ import { growthEngine } from '../src/modules/growth/growth.engine';
 const pool = new Pool({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
-// The one source of truth. Mirrors prisma/seed.ts's STAGES.
+// One source of truth. Mirrors prisma/seed.ts's STAGES. Enum keys removed from the pipeline:
+// FOUNDATIONS_GRADUATE, EMERGING_LEADER, CELL_LEADER, MINISTRY_LEADER, PASTORATE_CANDIDATE.
 const STAGES: {
   key: GrowthStageKey;
   order: number;
@@ -30,46 +35,51 @@ const STAGES: {
   { key: 'NEW_MEMBER', order: 2, name: 'New Member', requirements: [
     { key: 'UNIT_LEADER_LETTER_UPLOADED', label: 'Upload attestation letter from your unit leader', type: 'URL_UPLOAD' },
   ]},
-  { key: 'FOUNDATIONS_GRADUATE', order: 3, name: 'Foundations School Graduate', requirements: [
-    { key: 'FOUNDATIONS_CERT_VERIFIED', label: 'Foundations School certificate verified', type: 'CERTIFICATE' },
-    { key: 'FOUNDATIONS_ASSESSMENT', label: 'Pass assessment', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'WORKER', order: 4, name: 'Worker', requirements: [
+  { key: 'WORKER', order: 3, name: 'Worker', requirements: [
     { key: 'WORKER_SOM_CERT_VERIFIED', label: 'Upload SOM certificate (verified by admin)', type: 'CERTIFICATE' },
   ]},
-  { key: 'EMERGING_LEADER', order: 5, name: 'Emerging Leader', requirements: [
-    { key: 'SOM_CERT_VERIFIED', label: 'Complete SOM (certificate verified)', type: 'CERTIFICATE' },
-    { key: 'GOOD_STANDING_REC', label: 'Good standing recommendation', type: 'ADMIN_VERIFY' },
-    { key: 'CONSISTENT_SERVICE', label: 'Consistent service record', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'CELL_LEADER', order: 6, name: 'Cell Leader', requirements: [
-    { key: 'LEAD_CELL_GROUP', label: 'Lead a cell group', type: 'ADMIN_VERIFY' },
-    { key: 'SUBMIT_MONTHLY_REPORTS', label: 'Submit monthly reports', type: 'AUTO' },
-    { key: 'MENTOR_MEMBERS', label: 'Mentor members', type: 'AUTO' },
-  ]},
-  { key: 'ADVANCED_SOM_GRADUATE', order: 7, name: 'Advanced SOM Graduate', requirements: [
-    { key: 'ADV_SOM_CERT_VERIFIED', label: 'Complete Advanced SOM (certificate verified)', type: 'CERTIFICATE' },
-    { key: 'ADV_SOM_ASSESSMENT', label: 'Pass assessments', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'MINISTRY_LEADER', order: 8, name: 'Ministry Leader', requirements: [
-    { key: 'LEAD_DEPARTMENT', label: 'Lead a department', type: 'ADMIN_VERIFY' },
-    { key: 'TRAIN_WORKERS', label: 'Train workers', type: 'ADMIN_VERIFY' },
-    { key: 'DEMONSTRATE_CONSISTENCY', label: 'Demonstrate consistency', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'PASTORATE_CANDIDATE', order: 9, name: 'Pastorate Candidate', requirements: [
-    { key: 'LEADERSHIP_RECOMMENDATION', label: 'Recommendation from leadership', type: 'ADMIN_VERIFY' },
-    { key: 'COMPLETE_REQUIRED_TRAINING', label: 'Complete required training', type: 'ADMIN_VERIFY' },
-    { key: 'LEADERSHIP_REVIEW', label: 'Leadership review', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'PASTORATE', order: 10, name: 'Pastorate', requirements: [
+  { key: 'ADVANCED_SOM_GRADUATE', order: 4, name: 'School of Ministry Graduate', requirements: [
     { key: 'SPIRITUAL_OVERSIGHT_APPROVAL', label: 'Spiritual oversight approval', type: 'ADMIN_VERIFY' },
   ]},
+  { key: 'PASTORATE', order: 5, name: 'Pastorate', requirements: [] },
 ];
 
 async function main() {
   console.log('--- Growth pipeline sync ---\n');
 
-  // 1. Upsert every stage.
+  const expectedStageKeys = new Set(STAGES.map((s) => s.key));
+
+  // 1. Nullify User.currentStageId for anyone pointing at a stage we're about to delete.
+  // The FK is a plain reference (no onDelete: SetNull), so we can't delete stages that still
+  // have users pointing to them. This also heals "corrupted" records — users pointing at
+  // a stage that no longer exists get their pointer cleared, and step 4 assigns a valid one.
+  const staleStages = await prisma.growthStage.findMany({
+    where: { key: { notIn: [...expectedStageKeys] } },
+    select: { id: true, key: true },
+  });
+  if (staleStages.length) {
+    const staleIds = staleStages.map((s) => s.id);
+    const nullified = await prisma.user.updateMany({
+      where: { currentStageId: { in: staleIds } },
+      data: { currentStageId: null },
+    });
+    console.log(`Stale stages to remove: ${staleStages.map((s) => s.key).join(', ')}`);
+    console.log(`  Nullified currentStageId on ${nullified.count} user(s) first`);
+  } else {
+    console.log('No stale stages to remove.');
+  }
+
+  // 2. Delete stale stages. Cascade takes their requirements and any completions with them —
+  // correct behavior: a user's "completion" of a requirement whose stage no longer exists has
+  // no meaning in the new pipeline.
+  if (staleStages.length) {
+    const del = await prisma.growthStage.deleteMany({
+      where: { key: { notIn: [...expectedStageKeys] } },
+    });
+    console.log(`  Deleted ${del.count} stage(s) (requirements + completions cascaded)`);
+  }
+
+  // 3. Upsert every expected stage with correct order + name (safe if they already exist).
   for (const s of STAGES) {
     await prisma.growthStage.upsert({
       where: { key: s.key },
@@ -77,14 +87,14 @@ async function main() {
       create: { key: s.key, order: s.order, name: s.name },
     });
   }
-  console.log(`Stages: ${STAGES.length} upserted`);
+  console.log(`\nStages: ${STAGES.length} upserted`);
 
-  // 2. Upsert every expected requirement, linked to its stage.
-  const expectedKeys = new Set<string>();
+  // 4. Upsert every expected requirement, linked to its (now correctly-ordered) stage.
+  const expectedReqKeys = new Set<string>();
   for (const s of STAGES) {
     const stage = await prisma.growthStage.findUniqueOrThrow({ where: { key: s.key }, select: { id: true } });
     for (const r of s.requirements) {
-      expectedKeys.add(r.key);
+      expectedReqKeys.add(r.key);
       await prisma.growthRequirement.upsert({
         where: { key: r.key },
         update: { label: r.label, type: r.type, stageId: stage.id },
@@ -92,18 +102,16 @@ async function main() {
       });
     }
   }
-  console.log(`Requirements: ${expectedKeys.size} upserted`);
+  console.log(`Requirements: ${expectedReqKeys.size} upserted`);
 
-  // 3. Delete any requirement whose key isn't in the expected list. Cascade drops orphaned
-  // completions too — users who had "completed" a now-removed requirement lose that completion,
-  // which is the correct behavior (their currentStage will be recomputed against the new rules).
-  const removed = await prisma.growthRequirement.deleteMany({
-    where: { key: { notIn: [...expectedKeys] } },
+  // 5. Delete orphaned requirements — cascade drops their completions too.
+  const removedReqs = await prisma.growthRequirement.deleteMany({
+    where: { key: { notIn: [...expectedReqKeys] } },
   });
-  console.log(`Requirements removed (orphaned old ones): ${removed.count}`);
+  console.log(`Requirements removed (orphaned): ${removedReqs.count}`);
 
-  // 4. Recompute every non-deleted user. Idempotent — a user already at the correct stage stays
-  // there. Batched to keep memory flat on Render's small instance.
+  // 6. Recompute every non-deleted user. Idempotent; batched to keep memory flat on Render's
+  // starter instance. Users whose pointer was nullified in step 1 get a fresh valid stage now.
   const total = await prisma.user.count({ where: { deletedAt: null } });
   console.log(`\nRecomputing ${total} user(s)…`);
   let cursor: string | undefined;
@@ -124,7 +132,7 @@ async function main() {
     if (done % 500 === 0 || batch.length < 100) console.log(`  …${done}/${total}`);
     if (batch.length < 100) break;
   }
-  console.log(`\n✓ Done. Growth pipeline is in sync.`);
+  console.log(`\n✓ Done. Pipeline is in sync with the 5-stage definition.`);
 }
 
 main()

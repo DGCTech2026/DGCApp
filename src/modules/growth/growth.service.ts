@@ -17,7 +17,14 @@ export const growthService = {
       }),
     ]);
 
-    const current = stages.find((s) => s.id === user.currentStageId) ?? stages[0];
+    // Heal-on-read: if a user's currentStageId points at a stage that no longer exists (e.g.
+    // pre-restructure account) we recompute lazily so they never see an inconsistent
+    // "56% but no currentStage" response. Fire-and-forget the recompute so this read stays
+    // fast — the next call will show the correct state.
+    let current = stages.find((s) => s.id === user.currentStageId) ?? stages[0];
+    if (user.currentStageId && !stages.some((s) => s.id === user.currentStageId)) {
+      void growthEngine.recompute(userId).catch(() => {});
+    }
     const currentOrder = current?.order ?? 1;
     const total = stages.length || 1;
 

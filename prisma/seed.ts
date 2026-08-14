@@ -52,57 +52,39 @@ const DEFAULT_CLUSTERS = [
   { slug: 'missions-evangelism', name: 'Missions & Evangelism', description: 'Outreach coordination.' },
 ];
 
+// The 5-stage pipeline. Removed from earlier PRD draft: FOUNDATIONS_GRADUATE,
+// EMERGING_LEADER, CELL_LEADER, MINISTRY_LEADER, PASTORATE_CANDIDATE — the app UX
+// and admin flow both work off these 5. The 5 removed enum values still exist in the
+// GrowthStageKey enum (safe to leave — Postgres accepts unused enum values) but no rows
+// are seeded for them, so /growth/me will never return them.
+//
+// ADVANCED_SOM_GRADUATE keeps its enum key for backward compatibility but is DISPLAYED
+// as "School of Ministry Graduate" everywhere the name field is shown.
 const STAGES: {
   key: GrowthStageKey;
   order: number;
   name: string;
   requirements: { key: string; label: string; type: RequirementType }[];
 }[] = [
-  // Simplified onboarding gate: user uploads a photo of a service they attended. URL landing in
-  // RequirementCompletion.fileUrl auto-completes → recompute → promoted to NEW_MEMBER.
   { key: 'FIRST_TIMER', order: 1, name: 'First Timer', requirements: [
     { key: 'SERVICE_PHOTO_UPLOADED', label: 'Upload a photo of a service you attended', type: 'URL_UPLOAD' },
   ]},
-  // Attestation letter from the user's unit leader (Cloudinary URL). Same auto-complete pattern.
   { key: 'NEW_MEMBER', order: 2, name: 'New Member', requirements: [
     { key: 'UNIT_LEADER_LETTER_UPLOADED', label: 'Upload attestation letter from your unit leader', type: 'URL_UPLOAD' },
   ]},
-  { key: 'FOUNDATIONS_GRADUATE', order: 3, name: 'Foundations School Graduate', requirements: [
-    { key: 'FOUNDATIONS_CERT_VERIFIED', label: 'Foundations School certificate verified', type: 'CERTIFICATE' },
-    { key: 'FOUNDATIONS_ASSESSMENT', label: 'Pass assessment', type: 'ADMIN_VERIFY' },
-  ]},
   // Worker's promotion is gated on the SOM (School of Ministry) certificate. Any super admin
-  // verifies via the existing certificate queue → auto-promotes.
-  { key: 'WORKER', order: 4, name: 'Worker', requirements: [
+  // verifies via the existing certificate queue → auto-promotes to School of Ministry Graduate.
+  { key: 'WORKER', order: 3, name: 'Worker', requirements: [
     { key: 'WORKER_SOM_CERT_VERIFIED', label: 'Upload SOM certificate (verified by admin)', type: 'CERTIFICATE' },
   ]},
-  { key: 'EMERGING_LEADER', order: 5, name: 'Emerging Leader', requirements: [
-    { key: 'SOM_CERT_VERIFIED', label: 'Complete SOM (certificate verified)', type: 'CERTIFICATE' },
-    { key: 'GOOD_STANDING_REC', label: 'Good standing recommendation', type: 'ADMIN_VERIFY' },
-    { key: 'CONSISTENT_SERVICE', label: 'Consistent service record', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'CELL_LEADER', order: 6, name: 'Cell Leader', requirements: [
-    { key: 'LEAD_CELL_GROUP', label: 'Lead a cell group', type: 'ADMIN_VERIFY' },
-    { key: 'SUBMIT_MONTHLY_REPORTS', label: 'Submit monthly reports', type: 'AUTO' },
-    { key: 'MENTOR_MEMBERS', label: 'Mentor members', type: 'AUTO' },
-  ]},
-  { key: 'ADVANCED_SOM_GRADUATE', order: 7, name: 'Advanced SOM Graduate', requirements: [
-    { key: 'ADV_SOM_CERT_VERIFIED', label: 'Complete Advanced SOM (certificate verified)', type: 'CERTIFICATE' },
-    { key: 'ADV_SOM_ASSESSMENT', label: 'Pass assessments', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'MINISTRY_LEADER', order: 8, name: 'Ministry Leader', requirements: [
-    { key: 'LEAD_DEPARTMENT', label: 'Lead a department', type: 'ADMIN_VERIFY' },
-    { key: 'TRAIN_WORKERS', label: 'Train workers', type: 'ADMIN_VERIFY' },
-    { key: 'DEMONSTRATE_CONSISTENCY', label: 'Demonstrate consistency', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'PASTORATE_CANDIDATE', order: 9, name: 'Pastorate Candidate', requirements: [
-    { key: 'LEADERSHIP_RECOMMENDATION', label: 'Recommendation from leadership', type: 'ADMIN_VERIFY' },
-    { key: 'COMPLETE_REQUIRED_TRAINING', label: 'Complete required training', type: 'ADMIN_VERIFY' },
-    { key: 'LEADERSHIP_REVIEW', label: 'Leadership review', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'PASTORATE', order: 10, name: 'Pastorate', requirements: [
+  // Renamed from "Advanced SOM Graduate" — the DGC pipeline only has one SOM tier now.
+  // Enum key preserved for backward compat. To reach Pastorate, a super admin (typically
+  // themselves in Pastorate) grants spiritual oversight approval.
+  { key: 'ADVANCED_SOM_GRADUATE', order: 4, name: 'School of Ministry Graduate', requirements: [
     { key: 'SPIRITUAL_OVERSIGHT_APPROVAL', label: 'Spiritual oversight approval', type: 'ADMIN_VERIFY' },
   ]},
+  // Final stage — no further requirements. A user landing here stays here.
+  { key: 'PASTORATE', order: 5, name: 'Pastorate', requirements: [] },
 ];
 
 const BADGES = [
