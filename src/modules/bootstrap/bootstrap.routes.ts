@@ -25,6 +25,13 @@ bootstrapRouter.get(
       audioRoomService.list(userId, 'live'),
       eventService.listUpcoming(userId),
     ]);
-    res.json({ me, channels, notifications, liveAudioRooms, upcomingEvents });
+    res.json({
+      me,
+      channels,
+      notifications,
+      liveAudioRooms,
+      upcomingEvents,
+      welcomeVideoUrl: 'https://res.cloudinary.com/ph82hmab/video/upload/v1787087802/Welcome_to_Davidic_Generation_Church_fxay6v.mp4',
+    });
   }),
 );
