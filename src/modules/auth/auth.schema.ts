@@ -10,7 +10,10 @@ export const requestPhoneOtpSchema = z.object({ phone: e164 });
 
 // OAuth
 export const googleAuthSchema = z.object({ idToken: z.string().min(1) });
-export const appleAuthSchema = z.object({ idToken: z.string().min(1) });
+export const appleAuthSchema = z.object({
+  idToken: z.string().min(1),
+  displayName: z.string().min(1).max(100).optional(),
+});
 
 // Registration (single submit of the Create Account form; then verify the emailed code)
 export const registerSchema = z.object({

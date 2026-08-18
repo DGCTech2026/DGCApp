@@ -18,7 +18,7 @@ export const authController = {
   },
 
   async apple(req: Request, res: Response) {
-    const tokens = await authService.appleAuth(req.body.idToken);
+    const tokens = await authService.appleAuth(req.body.idToken, req.body.displayName);
     res.json(tokens);
   },
 

@@ -301,7 +301,7 @@ export const authService = {
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
-  async appleAuth(idToken: string) {
+  async appleAuth(idToken: string, displayName?: string) {
     if (!env.APPLE_CLIENT_ID) throw BadRequest('Apple sign-in is not configured');
     let claims: { sub?: string; email?: string; email_verified?: string | boolean };
     try {
@@ -334,7 +334,7 @@ export const authService = {
       // First-time Apple sign-in for this subject → we need the email to provision/link.
       if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
       const email = norm(claims.email);
-      const res = await ensureUser({ email }, { email });
+      const res = await ensureUser({ email }, { email, displayName: displayName ?? null });
       user = res.user;
       isNew = res.isNew;
     }
