@@ -64,4 +64,6 @@ export const cacheKeys = {
   branches: 'cache:branches',
   branch: (id: string) => `cache:branch:${id}`,
   clusters: 'cache:clusters',
+  adminDashboard: (scope: string) => `cache:admin:dashboard:${scope}`,
+  adminAnalytics: 'cache:admin:analytics',
 };

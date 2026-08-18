@@ -342,6 +342,7 @@ model BranchMembership {
 
   @@unique([userId, branchId])
   @@index([branchId])
+  @@index([branchId, joinedAt])
 }
 
 model Cluster {
@@ -370,6 +371,7 @@ model ClusterMembership {
 
   @@unique([userId, clusterId])
   @@index([clusterId])
+  @@index([userId])
 }
 
 // ============================================================================
@@ -455,6 +457,7 @@ model Message {
   @@index([channelId, createdAt])
   @@index([senderId])
   @@index([replyToId])
+  @@index([deletedAt])
 }
 
 // Per-message delivered/read — DMs ONLY (CLAUDE.md §5). Never write these for large channels.

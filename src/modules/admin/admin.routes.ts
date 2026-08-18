@@ -3,7 +3,7 @@ import { authenticate } from '../../middleware/authenticate';
 import { requireSuperAdmin } from '../../middleware/authorize';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { createBranchSchema, setRoleSchema, assignUserSchema } from './admin.schema';
+import { createBranchSchema, setRoleSchema, assignUserSchema, createClusterSchema, updateClusterSchema } from './admin.schema';
 import { adminController } from './admin.controller';
 
 export const adminRouter = Router();
@@ -18,6 +18,19 @@ adminRouter.post('/users/:userId/unsuspend', asyncHandler(adminController.unsusp
 adminRouter.post('/users/:userId/role', validate(setRoleSchema), asyncHandler(adminController.setRole));
 adminRouter.post('/branches', validate(createBranchSchema), asyncHandler(adminController.createBranch));
 adminRouter.post('/branches/:branchId/admins', validate(assignUserSchema), asyncHandler(adminController.assignBranchAdmin));
+
+// Global admin panel (super admin sees all branches)
+adminRouter.get('/dashboard', asyncHandler(adminController.globalDashboard));
+adminRouter.get('/members', asyncHandler(adminController.globalMembers));
+
+// Branch-scoped admin panel (Overview + Members tabs)
+adminRouter.get('/branches/:branchId/dashboard', asyncHandler(adminController.branchDashboard));
+adminRouter.get('/branches/:branchId/members', asyncHandler(adminController.branchMembers));
+adminRouter.post('/branches/:branchId/members/:userId/remove', asyncHandler(adminController.removeBranchMember));
+
+// Cluster management
+adminRouter.post('/clusters', validate(createClusterSchema), asyncHandler(adminController.createCluster));
+adminRouter.patch('/clusters/:clusterId', validate(updateClusterSchema), asyncHandler(adminController.updateCluster));
 adminRouter.post('/clusters/:clusterId/moderators', validate(assignUserSchema), asyncHandler(adminController.assignClusterModerator));
 adminRouter.post('/clusters/:clusterId/archive', asyncHandler(adminController.archiveCluster));
 adminRouter.post('/clusters/:clusterId/unarchive', asyncHandler(adminController.unarchiveCluster));
