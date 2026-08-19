@@ -228,6 +228,7 @@ model User {
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  onboardedAt DateTime? // stamped once when user first completes onboarding (name + branch)
   suspendedAt DateTime? // admin suspension (CLAUDE.md §13); null = active
   deletedAt   DateTime? // soft delete
 

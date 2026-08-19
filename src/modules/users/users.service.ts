@@ -53,7 +53,7 @@ export async function onboardToBranch(userId: string, branchId: string) {
     },
     { timeout: 20000, maxWait: 10000 },
   );
-  // The joined channels' cached member lists / counts are now stale.
+  await prisma.user.updateMany({ where: { id: userId, onboardedAt: null }, data: { onboardedAt: new Date() } });
   await invalidate(...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]));
   joinChannelRooms(userId, channelIds);
   await growthEngine.enqueueRequirement(userId, 'JOIN_BRANCH'); // AUTO (First Timer, §11)
@@ -65,6 +65,7 @@ export const userService = {
       where: { id: userId },
       select: {
         ...ME_SELECT,
+        onboardedAt: true,
         currentStage: { select: { key: true, name: true, order: true } },
         branchMemberships: {
           select: { role: true, branch: { select: { id: true, name: true, city: true } } },
@@ -75,10 +76,10 @@ export const userService = {
       },
     });
     if (!user) throw NotFound('User not found');
-    // The client uses this to decide whether to route into the Create Account onboarding screens.
     return {
       ...user,
-      onboardingComplete: Boolean(user.displayName && user.branchMemberships.length > 0),
+      onboardingComplete: Boolean(user.onboardedAt),
+      onboardedAt: undefined,
     };
   },
 
