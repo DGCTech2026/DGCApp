@@ -153,6 +153,7 @@ export const adminService = {
       create: { userId, clusterId, role: 'MODERATOR' },
       update: { role: 'MODERATOR' },
     });
+    await invalidate(cacheKeys.clusters);
     return { ok: true };
   },
 
@@ -160,7 +161,7 @@ export const adminService = {
     const c = await prisma.cluster.findUnique({ where: { id: clusterId }, select: { id: true } });
     if (!c) throw NotFound('Cluster not found');
     await prisma.cluster.update({ where: { id: clusterId }, data: { archivedAt: archived ? new Date() : null } });
-    await invalidate(cacheKeys.clusters);
+    await invalidate(cacheKeys.clusters, cacheKeys.adminDashboard('global'), cacheKeys.adminAnalytics);
     return { ok: true };
   },
 
@@ -183,7 +184,9 @@ export const adminService = {
         monthlyRaw,
         pipelineRaw,
       ] = await Promise.all([
-        prisma.branchMembership.count({ where: branchId ? { branchId } : {} }),
+        branchId
+          ? prisma.branchMembership.count({ where: { branchId } })
+          : prisma.user.count({ where: { deletedAt: null } }),
         prisma.growthStage.findMany({ orderBy: { order: 'asc' }, select: { id: true, name: true } }),
         prisma.certificate.count({ where: { status: 'PENDING' } }),
         branchId
@@ -339,7 +342,7 @@ export const adminService = {
     await prisma.channel.create({
       data: { type: 'CLUSTER', clusterId: cluster.id, name: cluster.name },
     });
-    await invalidate(cacheKeys.clusters);
+    await invalidate(cacheKeys.clusters, cacheKeys.adminDashboard('global'), cacheKeys.adminAnalytics);
     return cluster;
   },
 
@@ -359,7 +362,7 @@ export const adminService = {
         data: { name: input.name },
       });
     }
-    await invalidate(cacheKeys.clusters);
+    await invalidate(cacheKeys.clusters, cacheKeys.adminDashboard('global'), cacheKeys.adminAnalytics);
     return updated;
   },
 };

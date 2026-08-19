@@ -17,7 +17,7 @@ export const clusterService = {
     const [clusters, mine] = await Promise.all([
       cached(
         cacheKeys.clusters,
-        60,
+        10,
         async () => {
           const rows = await prisma.cluster.findMany({
             where: { archivedAt: null },
