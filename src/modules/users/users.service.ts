@@ -174,6 +174,10 @@ export const userService = {
 
     await invalidate(
       cacheKeys.userProfile(userId),
+      cacheKeys.clusters,
+      cacheKeys.branches,
+      cacheKeys.adminDashboard('global'),
+      cacheKeys.adminAnalytics,
       ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
     );
 
