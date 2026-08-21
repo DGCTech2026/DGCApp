@@ -4,7 +4,7 @@ import { growthEngine } from '../growth/growth.engine';
 import { getUserPresence } from '../chat/chat.socket';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import { optimizeAvatar } from '../../utils/cloudinaryUrl';
-import { joinChannelRooms } from '../../infra/realtime';
+import { joinChannelRooms, emitToChannel, getIo } from '../../infra/realtime';
 import type { UpdateMeInput } from './users.schema';
 
 const ME_SELECT = {
@@ -160,14 +160,29 @@ export const userService = {
   // Self-delete (hard purge) — removes the account + its data and frees the email/phone for reuse.
   // Handy for testing; also a legit "delete my account" action.
   async deleteMe(userId: string) {
+    const channelIds = (
+      await prisma.channelMembership.findMany({ where: { userId }, select: { channelId: true } })
+    ).map((c) => c.channelId);
+
     await prisma.$transaction(
       async (tx) => {
-        await tx.message.deleteMany({ where: { senderId: userId } }); // Message.senderId is RESTRICT
-        await tx.user.delete({ where: { id: userId } }); // cascades memberships, growth, badges, certs, tokens, etc.
+        await tx.message.deleteMany({ where: { senderId: userId } });
+        await tx.user.delete({ where: { id: userId } });
       },
       { timeout: 20000, maxWait: 10000 },
     );
-    await invalidate(cacheKeys.userProfile(userId));
+
+    await invalidate(
+      cacheKeys.userProfile(userId),
+      ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
+    );
+
+    const payload = { userId };
+    for (const channelId of channelIds) {
+      emitToChannel(channelId, 'user:deleted', payload);
+    }
+    getIo()?.emit('user:deleted', payload);
+
     return { ok: true };
   },
 };
