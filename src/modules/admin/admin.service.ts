@@ -1,6 +1,7 @@
 import { prisma } from '../../infra/db';
 import { NotFound, Conflict } from '../../utils/errors';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
+import { joinChannelRooms } from '../../infra/realtime';
 import type { CreateBranchInput, CreateClusterInput, UpdateClusterInput } from './admin.schema';
 
 const BRANCH_SECTIONS = [
@@ -137,11 +138,28 @@ export const adminService = {
   async assignBranchAdmin(branchId: string, userId: string) {
     const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { id: true } });
     if (!branch) throw NotFound('Branch not found');
-    await prisma.branchMembership.upsert({
-      where: { userId_branchId: { userId, branchId } },
-      create: { userId, branchId, role: 'ADMIN' },
-      update: { role: 'ADMIN' },
+
+    const branchChannels = await prisma.channel.findMany({ where: { branchId }, select: { id: true } });
+    const channelIds = branchChannels.map((c) => c.id);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.branchMembership.upsert({
+        where: { userId_branchId: { userId, branchId } },
+        create: { userId, branchId, role: 'ADMIN' },
+        update: { role: 'ADMIN' },
+      });
+      if (channelIds.length) {
+        await tx.channelMembership.createMany({
+          data: channelIds.map((channelId) => ({ userId, channelId })),
+          skipDuplicates: true,
+        });
+      }
     });
+
+    await invalidate(
+      ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
+    );
+    joinChannelRooms(userId, channelIds);
     return { ok: true };
   },
 
