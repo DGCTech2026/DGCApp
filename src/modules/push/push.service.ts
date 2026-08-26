@@ -37,11 +37,13 @@ async function sendToTokens(tokens: string[], p: PushPayload) {
   res.responses.forEach((r, i) => {
     if (!r.success) {
       const code = r.error?.code;
+      logger.warn({ token: tokens[i]?.slice(0, 12), code, message: r.error?.message }, 'push delivery failed');
       if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-argument') {
         dead.push(tokens[i]!);
       }
     }
   });
+  logger.info({ total: tokens.length, success: res.successCount, failure: res.failureCount }, 'push batch result');
   if (dead.length) await prisma.deviceToken.deleteMany({ where: { token: { in: dead } } });
 }
 
