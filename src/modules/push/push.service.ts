@@ -23,12 +23,11 @@ async function sendToTokens(tokens: string[], p: PushPayload) {
     notification: { title: p.title, ...(p.body ? { body: p.body } : {}) },
     data: toStringMap(p.data),
     apns: {
-      headers: { 'apns-priority': '10' },
+      headers: { 'apns-push-type': 'alert', 'apns-priority': '10' },
       payload: {
         aps: {
           alert: { title: p.title, ...(p.body ? { body: p.body } : {}) },
           sound: 'default',
-          contentAvailable: true,
           mutableContent: true,
         },
       },
