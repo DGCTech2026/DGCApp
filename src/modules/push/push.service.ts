@@ -9,10 +9,38 @@ type IncomingCallPushPayload = PushPayload & { ttlMs?: number };
 type TokenMessage = Extract<Message, { token: string }>;
 
 // FCM data values must all be strings.
+function stringifyDataValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  if (value instanceof Date) return value.toISOString();
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? String(value) : json;
+  } catch {
+    return String(value);
+  }
+}
+
 function toStringMap(data?: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(data ?? {})) if (v !== null && v !== undefined) out[k] = String(v);
+  for (const [k, v] of Object.entries(data ?? {})) {
+    const value = stringifyDataValue(v);
+    if (value !== undefined) out[k] = value;
+  }
   return out;
+}
+
+function isDeadTokenError(code?: string, message?: string): boolean {
+  if (
+    code === 'messaging/registration-token-not-registered' ||
+    code === 'messaging/invalid-registration-token' ||
+    code === 'messaging/mismatched-credential'
+  ) {
+    return true;
+  }
+  if (code !== 'messaging/invalid-argument') return false;
+  return /registration token|token is not a valid|invalid registration/i.test(message ?? '');
 }
 
 // Push to a set of tokens; prune any that FCM reports as dead (uninstalled / expired).
@@ -38,7 +66,7 @@ async function sendToTokens(tokens: string[], p: PushPayload) {
     if (!r.success) {
       const code = r.error?.code;
       logger.warn({ token: tokens[i]?.slice(0, 12), code, message: r.error?.message }, 'push delivery failed');
-      if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-argument') {
+      if (isDeadTokenError(code, r.error?.message)) {
         dead.push(tokens[i]!);
       }
     }
@@ -57,7 +85,8 @@ async function sendTokenMessages(messages: TokenMessage[]) {
       const token = chunk[index]?.token;
       if (!r.success && token) {
         const code = r.error?.code;
-        if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-argument') {
+        logger.warn({ token: token.slice(0, 12), code, message: r.error?.message }, 'push delivery failed');
+        if (isDeadTokenError(code, r.error?.message)) {
           dead.push(token);
         }
       }

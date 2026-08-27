@@ -164,7 +164,9 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/users/me/devices',
   tags: ['users'],
-  summary: 'Register this device for push notifications (FCM) — call after login',
+  summary: 'Register or refresh this device for push notifications (FCM)',
+  description:
+    'Call after login, app launch, and FCM token refresh. Body accepts token/deviceToken/fcmToken/pushToken and uppercase or lowercase platform.',
   security: bearer,
   request: { body: json(registerDeviceSchema) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },

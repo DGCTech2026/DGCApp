@@ -24,11 +24,71 @@ export const updateMeSchema = z
 
 export type UpdateMeInput = z.infer<typeof updateMeSchema>;
 
+const nonEmptyString = z.string().trim().min(1);
+const devicePlatform = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .pipe(z.enum(['ANDROID', 'IOS', 'WEB']));
+
+function unwrapDevicePayload(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  for (const key of ['device', 'push', 'payload', 'registration']) {
+    const nested = input[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return { ...(nested as Record<string, unknown>), ...input };
+    }
+  }
+  return value;
+}
+
+function firstToken(input: { token?: string; deviceToken?: string; fcmToken?: string; pushToken?: string }) {
+  return input.token ?? input.deviceToken ?? input.fcmToken ?? input.pushToken;
+}
+
 // FCM device registration for push notifications. voipToken is the separate APNs VoIP push
-// token iOS clients register via PushKit — used for CallKit incoming-call ringing.
-export const registerDeviceSchema = z.object({
-  token: z.string().min(1),
-  platform: z.enum(['ANDROID', 'IOS', 'WEB']),
-  voipToken: z.string().min(1).optional(),
-});
-export const removeDeviceSchema = z.object({ token: z.string().min(1) });
+// token iOS clients register via PushKit — used for CallKit incoming-call ringing. Accept the
+// common client aliases too, so a payload rename does not leave the token table empty after purge.
+export const registerDeviceSchema = z.preprocess(
+  unwrapDevicePayload,
+  z
+    .object({
+      token: nonEmptyString.optional(),
+      deviceToken: nonEmptyString.optional(),
+      fcmToken: nonEmptyString.optional(),
+      pushToken: nonEmptyString.optional(),
+      platform: devicePlatform,
+      voipToken: nonEmptyString.optional(),
+      apnsVoipToken: nonEmptyString.optional(),
+    })
+    .passthrough()
+    .superRefine((input, ctx) => {
+      if (!firstToken(input)) {
+        ctx.addIssue({ code: 'custom', message: 'Device token is required' });
+      }
+    })
+    .transform((input) => ({
+      token: firstToken(input)!,
+      platform: input.platform,
+      voipToken: input.voipToken ?? input.apnsVoipToken,
+    })),
+);
+
+export const removeDeviceSchema = z.preprocess(
+  unwrapDevicePayload,
+  z
+    .object({
+      token: nonEmptyString.optional(),
+      deviceToken: nonEmptyString.optional(),
+      fcmToken: nonEmptyString.optional(),
+      pushToken: nonEmptyString.optional(),
+    })
+    .passthrough()
+    .superRefine((input, ctx) => {
+      if (!firstToken(input)) {
+        ctx.addIssue({ code: 'custom', message: 'Device token is required' });
+      }
+    })
+    .transform((input) => ({ token: firstToken(input)! })),
+);

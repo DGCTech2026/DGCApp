@@ -13,6 +13,6 @@ usersRouter.get('/:userId', authenticate, cacheControl(120), asyncHandler(userCo
 usersRouter.patch('/me', authenticate, validate(updateMeSchema), asyncHandler(userController.updateMe));
 usersRouter.delete('/me', authenticate, asyncHandler(userController.deleteMe));
 
-// Push device tokens (FCM) — register after login, unregister on logout.
+// Push device tokens (FCM) — register after login, app launch, and token refresh; unregister on logout.
 usersRouter.post('/me/devices', authenticate, validate(registerDeviceSchema), asyncHandler(userController.registerDevice));
 usersRouter.delete('/me/devices', authenticate, validate(removeDeviceSchema), asyncHandler(userController.removeDevice));
