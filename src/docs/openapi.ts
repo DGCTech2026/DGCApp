@@ -166,7 +166,7 @@ registry.registerPath({
   tags: ['users'],
   summary: 'Register or refresh this device for push notifications (FCM)',
   description:
-    'Call after login, app launch, and FCM token refresh. Body accepts token/deviceToken/fcmToken/pushToken and uppercase or lowercase platform.',
+    'Call after login, app launch, and FCM token refresh. Body accepts token/deviceToken/fcmToken/pushToken and uppercase or lowercase platform. iOS must send the Firebase FCM registration token, not the raw 64-character APNs device token.',
   security: bearer,
   request: { body: json(registerDeviceSchema) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },

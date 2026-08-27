@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { looksLikeRawApnsToken } from '../../utils/pushToken';
 
 const e164 = z
   .string()
@@ -43,8 +44,8 @@ function unwrapDevicePayload(value: unknown): unknown {
   return value;
 }
 
-function firstToken(input: { token?: string; deviceToken?: string; fcmToken?: string; pushToken?: string }) {
-  return input.token ?? input.deviceToken ?? input.fcmToken ?? input.pushToken;
+function firstFcmToken(input: { token?: string; deviceToken?: string; fcmToken?: string; pushToken?: string }) {
+  return input.fcmToken ?? input.pushToken ?? input.deviceToken ?? input.token;
 }
 
 // FCM device registration for push notifications. voipToken is the separate APNs VoIP push
@@ -59,17 +60,24 @@ export const registerDeviceSchema = z.preprocess(
       fcmToken: nonEmptyString.optional(),
       pushToken: nonEmptyString.optional(),
       platform: devicePlatform,
+      apnsToken: nonEmptyString.optional(),
       voipToken: nonEmptyString.optional(),
       apnsVoipToken: nonEmptyString.optional(),
     })
     .passthrough()
     .superRefine((input, ctx) => {
-      if (!firstToken(input)) {
+      const token = firstFcmToken(input);
+      if (!token) {
         ctx.addIssue({ code: 'custom', message: 'Device token is required' });
+      } else if (input.platform === 'IOS' && looksLikeRawApnsToken(token)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'iOS push registration must send the Firebase FCM token, not the raw APNs device token',
+        });
       }
     })
     .transform((input) => ({
-      token: firstToken(input)!,
+      token: firstFcmToken(input)!,
       platform: input.platform,
       voipToken: input.voipToken ?? input.apnsVoipToken,
     })),
@@ -86,9 +94,9 @@ export const removeDeviceSchema = z.preprocess(
     })
     .passthrough()
     .superRefine((input, ctx) => {
-      if (!firstToken(input)) {
+      if (!firstFcmToken(input)) {
         ctx.addIssue({ code: 'custom', message: 'Device token is required' });
       }
     })
-    .transform((input) => ({ token: firstToken(input)! })),
+    .transform((input) => ({ token: firstFcmToken(input)! })),
 );
