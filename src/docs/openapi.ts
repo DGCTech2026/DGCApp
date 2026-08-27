@@ -365,7 +365,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/{channelId}/messages',
   tags: ['chat'],
-  summary: 'Send a message. Supports reply (replyToId), @user mentions (mentions[]), and @everyone (mentionEveryone: true). Response payload includes replyTo preview when replying, so no follow-up fetch is needed.',
+  summary: 'Send a message. Supports retry-safe clientMessageId, replyToId, mentions[], and mentionEveryone. Response payload includes replyTo preview when replying.',
   security: bearer,
   request: {
     params: z.object({ channelId: z.string() }),
@@ -374,7 +374,7 @@ registry.registerPath({
         'application/json': {
           schema: sendMessageSchema,
           examples: {
-            plain: { summary: 'Plain text', value: { type: 'TEXT', body: 'Hello everyone' } },
+            plain: { summary: 'Plain text', value: { type: 'TEXT', body: 'Hello everyone', clientMessageId: 'local-uuid-123' } },
             reply: { summary: 'Reply to a message', value: { type: 'TEXT', body: 'Amen!', replyToId: 'cm...' } },
             mention: { summary: 'Mention specific users', value: { type: 'TEXT', body: '@Kwasu can you lead?', mentions: ['cm...user1', 'cm...user2'] } },
             everyone: { summary: '@everyone', value: { type: 'TEXT', body: 'All hands — prayer at 5am', mentionEveryone: true } },

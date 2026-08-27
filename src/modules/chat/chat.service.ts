@@ -1,8 +1,11 @@
+import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../infra/db';
 import { channelService } from '../channels/channels.service';
 import { notificationQueue } from '../../infra/queue';
 import { enqueue } from '../../infra/enqueue';
 import { emitToChannel } from '../../infra/realtime';
+import { logger } from '../../infra/logger';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import { optimizeImage, thumbUrl } from '../../utils/cloudinaryUrl';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
@@ -31,6 +34,7 @@ const MESSAGE_SELECT = {
   title: true,
   body: true,
   mediaUrl: true,
+  clientMessageId: true,
   replyToId: true,
   forwardedFromId: true,
   pinnedById: true,
@@ -81,6 +85,76 @@ function isModerator(role: string, membershipRole: string | undefined) {
   return role === 'SUPER_ADMIN' || membershipRole === 'ADMIN' || membershipRole === 'MODERATOR';
 }
 
+type MessagePayload = Prisma.MessageGetPayload<{ select: typeof MESSAGE_SELECT }>;
+
+const SEND_RETRY_DELAYS_MS = [150, 500, 1200];
+const RETRYABLE_PRISMA_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2034']);
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDbError(err: unknown) {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) return RETRYABLE_PRISMA_CODES.has(err.code);
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  if (err instanceof Prisma.PrismaClientUnknownRequestError) {
+    return /ECONNRESET|ETIMEDOUT|ECONNREFUSED|connection.*closed|connection.*terminated|timeout/i.test(err.message);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /ECONNRESET|ETIMEDOUT|ECONNREFUSED|connection.*closed|connection.*terminated|timeout/i.test(message);
+}
+
+function isUniqueConflict(err: unknown) {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+}
+
+async function retryDbWrite<T>(operation: () => Promise<T>) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      const delayMs = SEND_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isRetryableDbError(err)) throw err;
+      logger.warn({ err, attempt: attempt + 1, delayMs }, 'chat send transient DB failure; retrying');
+      await sleep(delayMs);
+    }
+  }
+}
+
+async function findExistingSentMessage(userId: string, channelId: string, messageId: string, clientMessageId?: string) {
+  return prisma.message.findFirst({
+    where: clientMessageId ? { senderId: userId, channelId, clientMessageId } : { id: messageId, senderId: userId, channelId },
+    select: MESSAGE_SELECT,
+  });
+}
+
+function notifyMessageFanout(channelId: string, channelType: string, userId: string, message: MessagePayload, dto: SendMessageInput) {
+  const senderName = message.sender.displayName ?? 'Someone';
+  const jobBase = { channelId, messageId: message.id, senderId: userId, body: message.body };
+  if (channelType === 'DM') {
+    enqueue(notificationQueue, 'dm-notify', { ...jobBase, senderName: message.sender.displayName ?? 'New message' });
+  } else {
+    enqueue(notificationQueue, 'message-fanout', { ...jobBase, senderName });
+  }
+
+  // @mentions — notify the tagged users who are members of this channel (PRD §7).
+  // @everyone (mentionEveryone: true) fans out to every non-muted member; the worker resolves
+  // the recipient list against ChannelMembership at fan-out time so it stays fresh.
+  if (dto.mentionEveryone) {
+    enqueue(notificationQueue, 'mention-fanout', {
+      channelId, messageId: message.id, senderName, body: message.body,
+      everyone: true, excludeUserId: userId,
+    });
+  } else if (dto.mentions?.length) {
+    const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
+    if (targets.length) {
+      enqueue(notificationQueue, 'mention-fanout', {
+        channelId, messageId: message.id, senderName, body: message.body, targets,
+      });
+    }
+  }
+}
+
 export const chatService = {
   async send(userId: string, role: string, channelId: string, dto: SendMessageInput) {
     if (dto.type === 'CONTACT') {
@@ -91,99 +165,102 @@ export const chatService = {
     } else if (!dto.body && !dto.mediaUrl) {
       throw BadRequest('A message needs a body or mediaUrl');
     }
-    const [membership, channel] = await Promise.all([
-      channelService.requireMember(userId, role, channelId),
-      prisma.channel.findUnique({
-        where: { id: channelId },
-        select: { isReadOnly: true, type: true },
-      }),
-    ]);
-    if (!channel) throw NotFound('Channel not found');
-    if (channel.isReadOnly && !isModerator(role, membership?.role)) {
-      throw Forbidden('This channel is read-only');
-    }
 
-    if (dto.replyToId) {
-      const parent = await prisma.message.findUnique({
-        where: { id: dto.replyToId },
-        select: { channelId: true },
-      });
-      if (!parent || parent.channelId !== channelId) throw BadRequest('Reply target is not in this channel');
-    }
-
-    // For POLL messages, create via the relation API so Prisma is happy with types.
-    if (dto.type === 'POLL' && dto.poll) {
-      const poll = await prisma.poll.create({
-        data: {
-          question: dto.poll.question,
-          allowMultiple: dto.poll.allowMultiple,
-          expiresAt: dto.poll.expiresAt ?? null,
-          options: { create: dto.poll.options.map((text, i) => ({ text, order: i })) },
-        },
-      });
-      const message = await prisma.message.create({
-        data: {
-          channelId,
-          senderId: userId,
-          type: 'POLL',
-          body: dto.poll.question,
-          replyToId: dto.replyToId ?? null,
-          pollId: poll.id,
-        },
-        select: MESSAGE_SELECT,
-      });
-      const decorated = withThumb(message);
-      emitToChannel(channelId, 'message:new', decorated);
-      return decorated;
-    }
-
-    // Store images as right-sized auto-format delivery URLs (originals stay in Cloudinary) so
-    // every future read — on any client — downloads a fraction of the bytes.
-    const message = await prisma.message.create({
-      data: {
-        channelId,
-        senderId: userId,
-        type: dto.type,
-        body: dto.body ?? null,
-        mediaUrl: dto.mediaUrl ? (dto.type === 'IMAGE' ? optimizeImage(dto.mediaUrl) : dto.mediaUrl) : null,
-        replyToId: dto.replyToId ?? null,
-        contactName: dto.contactName ?? null,
-        contactPhone: dto.contactPhone ?? null,
-        contactEmail: dto.contactEmail ?? null,
-      },
-      select: MESSAGE_SELECT,
-    });
-    emitToChannel(channelId, 'message:new', withThumb(message));
-
-    // Fire-and-forget: the sender's response must not block on Redis enqueue. If the enqueue
-    // fails, the socket delivery already happened; log and move on. This shaves 10-20ms off
-    // the send round trip AND lets the socket emit reach the recipient sooner because we're
-    // not holding a Redis connection ahead of it.
-    const senderName = message.sender.displayName ?? 'Someone';
-    const jobBase = { channelId, messageId: message.id, senderId: userId, body: message.body };
-    if (channel.type === 'DM') {
-      enqueue(notificationQueue, 'dm-notify', { ...jobBase, senderName: message.sender.displayName ?? 'New message' });
-    } else {
-      enqueue(notificationQueue, 'message-fanout', { ...jobBase, senderName });
-    }
-
-    // @mentions — notify the tagged users who are members of this channel (PRD §7).
-    // @everyone (mentionEveryone: true) fans out to every non-muted member; the worker resolves
-    // the recipient list against ChannelMembership at fan-out time so it stays fresh.
-    if (dto.mentionEveryone) {
-      enqueue(notificationQueue, 'mention-fanout', {
-        channelId, messageId: message.id, senderName, body: message.body,
-        everyone: true, excludeUserId: userId,
-      });
-    } else if (dto.mentions?.length) {
-      const targets = [...new Set(dto.mentions)].filter((id) => id !== userId);
-      if (targets.length) {
-        enqueue(notificationQueue, 'mention-fanout', {
-          channelId, messageId: message.id, senderName, body: message.body, targets,
-        });
+    const messageId = randomUUID();
+    const result = await retryDbWrite(async () => {
+      const [membership, channel] = await Promise.all([
+        channelService.requireMember(userId, role, channelId),
+        prisma.channel.findUnique({
+          where: { id: channelId },
+          select: { isReadOnly: true, type: true },
+        }),
+      ]);
+      if (!channel) throw NotFound('Channel not found');
+      if (channel.isReadOnly && !isModerator(role, membership?.role)) {
+        throw Forbidden('This channel is read-only');
       }
+
+      if (dto.replyToId) {
+        const parent = await prisma.message.findUnique({
+          where: { id: dto.replyToId },
+          select: { channelId: true },
+        });
+        if (!parent || parent.channelId !== channelId) throw BadRequest('Reply target is not in this channel');
+      }
+
+      const existing = dto.clientMessageId
+        ? await findExistingSentMessage(userId, channelId, messageId, dto.clientMessageId)
+        : null;
+      if (existing) return { message: existing, channelType: channel.type, created: false };
+
+      try {
+        // For POLL messages, create poll + message atomically so retries cannot orphan polls.
+        if (dto.type === 'POLL' && dto.poll) {
+          const message = await prisma.$transaction(async (tx) => {
+            const poll = await tx.poll.create({
+              data: {
+                question: dto.poll!.question,
+                allowMultiple: dto.poll!.allowMultiple,
+                expiresAt: dto.poll!.expiresAt ?? null,
+                options: { create: dto.poll!.options.map((text, i) => ({ text, order: i })) },
+              },
+            });
+            return tx.message.create({
+              data: {
+                id: messageId,
+                channelId,
+                senderId: userId,
+                clientMessageId: dto.clientMessageId ?? null,
+                type: 'POLL',
+                body: dto.poll!.question,
+                replyToId: dto.replyToId ?? null,
+                pollId: poll.id,
+              },
+              select: MESSAGE_SELECT,
+            });
+          });
+          return { message, channelType: channel.type, created: true };
+        }
+
+        // Store images as right-sized auto-format delivery URLs (originals stay in Cloudinary) so
+        // every future read — on any client — downloads a fraction of the bytes.
+        const message = await prisma.message.create({
+          data: {
+            id: messageId,
+            channelId,
+            senderId: userId,
+            clientMessageId: dto.clientMessageId ?? null,
+            type: dto.type,
+            body: dto.body ?? null,
+            mediaUrl: dto.mediaUrl ? (dto.type === 'IMAGE' ? optimizeImage(dto.mediaUrl) : dto.mediaUrl) : null,
+            replyToId: dto.replyToId ?? null,
+            contactName: dto.contactName ?? null,
+            contactPhone: dto.contactPhone ?? null,
+            contactEmail: dto.contactEmail ?? null,
+          },
+          select: MESSAGE_SELECT,
+        });
+        return { message, channelType: channel.type, created: true };
+      } catch (err) {
+        if (isUniqueConflict(err)) {
+          const existingMessage = await findExistingSentMessage(userId, channelId, messageId, dto.clientMessageId);
+          if (existingMessage) return { message: existingMessage, channelType: channel.type, created: false };
+        }
+        throw err;
+      }
+    });
+
+    const decorated = withThumb(result.message);
+    if (result.created) {
+      emitToChannel(channelId, 'message:new', decorated);
+
+      // Fire-and-forget: the sender's response must not block on Redis enqueue. If the enqueue
+      // fails, the socket delivery already happened; log and move on. This shaves 10-20ms off
+      // the send round trip AND lets the socket emit reach the recipient sooner because we're
+      // not holding a Redis connection ahead of it.
+      notifyMessageFanout(channelId, result.channelType, userId, result.message, dto);
     }
-    return withThumb(message);
+    return decorated;
   },
 
   async list(userId: string, role: string, channelId: string, opts: ListMessagesInput) {

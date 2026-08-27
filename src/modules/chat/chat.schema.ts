@@ -4,6 +4,7 @@ export const sendMessageSchema = z.object({
   type: z.enum(['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE', 'SYSTEM', 'POLL', 'CONTACT']).default('TEXT'),
   body: z.string().max(4000).optional(),
   mediaUrl: z.string().url().optional(),
+  clientMessageId: z.string().trim().min(1).max(128).optional(),
   replyToId: z.string().optional(),
   mentions: z.array(z.string()).optional(), // user ids to @mention (notified if they're channel members)
   mentionEveryone: z.boolean().optional().default(false), // @everyone — fan-out MENTION to every non-muted member of the channel
