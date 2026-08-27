@@ -80,7 +80,15 @@ async function sendToTokens(rows: StoredDeviceToken[], p: PushPayload) {
   res.responses.forEach((r, i) => {
     if (!r.success) {
       const code = r.error?.code;
-      logger.warn({ token: tokens[i]?.slice(0, 12), code, message: r.error?.message }, 'push delivery failed');
+      logger.warn(
+        {
+          platform: validRows[i]?.platform,
+          tokenLength: tokens[i]?.length,
+          errorCode: code,
+          message: r.error?.message,
+        },
+        'push delivery failed',
+      );
       if (isDeadTokenError(code, r.error?.message)) {
         dead.push(tokens[i]!);
       }
@@ -107,7 +115,7 @@ async function sendTokenMessages(messages: TokenMessage[]) {
       const token = chunk[index]?.token;
       if (!r.success && token) {
         const code = r.error?.code;
-        logger.warn({ token: token.slice(0, 12), code, message: r.error?.message }, 'push delivery failed');
+        logger.warn({ tokenLength: token.length, errorCode: code, message: r.error?.message }, 'push delivery failed');
         if (isDeadTokenError(code, r.error?.message)) {
           dead.push(token);
         }
