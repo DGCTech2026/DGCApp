@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { looksLikeRawApnsToken } from '../../utils/pushToken';
 
 const e164 = z
   .string()
@@ -44,13 +43,13 @@ function unwrapDevicePayload(value: unknown): unknown {
   return value;
 }
 
-function firstFcmToken(input: { token?: string; deviceToken?: string; fcmToken?: string; pushToken?: string }) {
-  return input.fcmToken ?? input.pushToken ?? input.deviceToken ?? input.token;
+function firstPushToken(input: { token?: string; deviceToken?: string; fcmToken?: string; pushToken?: string; apnsToken?: string }) {
+  return input.fcmToken ?? input.pushToken ?? input.deviceToken ?? input.token ?? input.apnsToken;
 }
 
-// FCM device registration for push notifications. voipToken is the separate APNs VoIP push
-// token iOS clients register via PushKit — used for CallKit incoming-call ringing. Accept the
-// common client aliases too, so a payload rename does not leave the token table empty after purge.
+// Device registration for push notifications. Android/Web use FCM. iOS may use either an FCM
+// token or a raw APNs token, depending on the frontend push library available for the build.
+// voipToken is the separate APNs VoIP token iOS clients register via PushKit.
 export const registerDeviceSchema = z.preprocess(
   unwrapDevicePayload,
   z
@@ -66,18 +65,13 @@ export const registerDeviceSchema = z.preprocess(
     })
     .passthrough()
     .superRefine((input, ctx) => {
-      const token = firstFcmToken(input);
+      const token = firstPushToken(input);
       if (!token) {
         ctx.addIssue({ code: 'custom', message: 'Device token is required' });
-      } else if (input.platform === 'IOS' && looksLikeRawApnsToken(token)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'iOS push registration must send the Firebase FCM token, not the raw APNs device token',
-        });
       }
     })
     .transform((input) => ({
-      token: firstFcmToken(input)!,
+      token: firstPushToken(input)!,
       platform: input.platform,
       voipToken: input.voipToken ?? input.apnsVoipToken,
     })),
@@ -91,12 +85,13 @@ export const removeDeviceSchema = z.preprocess(
       deviceToken: nonEmptyString.optional(),
       fcmToken: nonEmptyString.optional(),
       pushToken: nonEmptyString.optional(),
+      apnsToken: nonEmptyString.optional(),
     })
     .passthrough()
     .superRefine((input, ctx) => {
-      if (!firstFcmToken(input)) {
+      if (!firstPushToken(input)) {
         ctx.addIssue({ code: 'custom', message: 'Device token is required' });
       }
     })
-    .transform((input) => ({ token: firstFcmToken(input)! })),
+    .transform((input) => ({ token: firstPushToken(input)! })),
 );

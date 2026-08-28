@@ -30,6 +30,13 @@ const schema = z.object({
   CLOUDINARY_URL: z.string().optional(),
   // FCM push — base64-encoded Firebase service-account JSON. Push stays disabled until this is set.
   FCM_SERVICE_ACCOUNT: z.string().optional(),
+  // APNs push — direct iOS delivery for apps that register raw APNs tokens instead of FCM tokens.
+  APNS_KEY_ID: optionalString,
+  APNS_TEAM_ID: optionalString,
+  APNS_BUNDLE_ID: optionalString,
+  APNS_PRIVATE_KEY: optionalString,
+  APNS_PRIVATE_KEY_BASE64: optionalString,
+  APNS_ENV: z.enum(['sandbox', 'production']).optional(),
   // SMS (phone OTP) — optional; phone sign-in stays disabled until set. Termii (NG) by default.
   TERMII_API_KEY: z.string().optional(),
   TERMII_SENDER_ID: z.string().default('DGC'),
