@@ -6,6 +6,7 @@ import { emailQueue, smsQueue } from '../../infra/queue';
 import { env } from '../../config/env';
 import { isSmsConfigured } from '../../infra/sms';
 import { redis } from '../../infra/redis';
+import { logger } from '../../infra/logger';
 import { growthEngine } from '../growth/growth.engine';
 import { onboardToBranch } from '../users/users.service';
 import { isDisposableEmail } from '../../utils/email';
@@ -21,6 +22,9 @@ const MAX_OTP_ATTEMPTS = 5;
 // lost in transit, its retry must not dead-end (logged out / forced to request a new code).
 const ROTATION_GRACE_MS = 60 * 1000;
 const OTP_RETRY_GRACE_S = 90;
+const GOOGLE_VERIFY_ATTEMPTS = 2;
+const GOOGLE_VERIFY_TIMEOUT_MS = 8_000;
+const GOOGLE_VERIFY_RETRY_DELAY_MS = 250;
 const googleClient = new OAuth2Client();
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -44,6 +48,43 @@ const AUTH_USER_SELECT = {
   avatarUrl: true,
   globalRole: true,
 } as const;
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function isLikelyInvalidGoogleToken(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return /audience|issuer|expired|invalid token|wrong number of segments|no pem found|signature/i.test(message);
+}
+
+async function verifyGoogleIdTokenWithRetry(idToken: string, audience: string) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= GOOGLE_VERIFY_ATTEMPTS; attempt++) {
+    try {
+      return await withTimeout(
+        googleClient.verifyIdToken({ idToken, audience }),
+        GOOGLE_VERIFY_TIMEOUT_MS,
+        'Google token verification timed out',
+      );
+    } catch (err) {
+      lastError = err;
+      if (attempt >= GOOGLE_VERIFY_ATTEMPTS || isLikelyInvalidGoogleToken(err)) break;
+      logger.warn({ err, attempt, delayMs: GOOGLE_VERIFY_RETRY_DELAY_MS }, 'Google token verification failed; retrying');
+      await wait(GOOGLE_VERIFY_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
+}
 
 // Single chokepoint for token issuance → a suspended or deleted account can't get tokens via ANY
 // path (login, OTP, Google, Apple, refresh). This is what gives admin suspend real teeth.
@@ -254,9 +295,10 @@ export const authService = {
     if (!env.GOOGLE_CLIENT_ID) throw BadRequest('Google sign-in is not configured');
     let payload: TokenPayload | undefined;
     try {
-      const ticket = await googleClient.verifyIdToken({ idToken, audience: env.GOOGLE_CLIENT_ID });
+      const ticket = await verifyGoogleIdTokenWithRetry(idToken, env.GOOGLE_CLIENT_ID);
       payload = ticket.getPayload();
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, 'Google token verification failed');
       throw Unauthorized('Invalid Google token');
     }
     if (!payload?.email || !payload.email_verified) throw Unauthorized('Google account email not verified');

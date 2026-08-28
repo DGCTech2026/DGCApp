@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/authenticate';
-import { requireSuperAdmin } from '../../middleware/authorize';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
 import {
@@ -26,7 +25,7 @@ growthRouter.post('/certificates', authenticate, validate(submitCertificateSchem
 growthRouter.get('/certificates', authenticate, asyncHandler(growthController.listMyCertificates));
 
 // Admin — verification queue (PRD §13)
-growthRouter.get('/admin/certificates', authenticate, requireSuperAdmin, asyncHandler(growthController.listPendingCertificates));
-growthRouter.post('/admin/certificates/:id/verify', authenticate, requireSuperAdmin, asyncHandler(growthController.verifyCertificate));
-growthRouter.post('/admin/certificates/:id/reject', authenticate, requireSuperAdmin, validate(rejectCertificateSchema), asyncHandler(growthController.rejectCertificate));
-growthRouter.post('/admin/requirements/verify', authenticate, requireSuperAdmin, validate(adminVerifyRequirementSchema), asyncHandler(growthController.adminVerifyRequirement));
+growthRouter.get('/admin/certificates', authenticate, asyncHandler(growthController.listPendingCertificates));
+growthRouter.post('/admin/certificates/:id/verify', authenticate, asyncHandler(growthController.verifyCertificate));
+growthRouter.post('/admin/certificates/:id/reject', authenticate, validate(rejectCertificateSchema), asyncHandler(growthController.rejectCertificate));
+growthRouter.post('/admin/requirements/verify', authenticate, validate(adminVerifyRequirementSchema), asyncHandler(growthController.adminVerifyRequirement));

@@ -1,5 +1,5 @@
 import { prisma } from '../../infra/db';
-import { NotFound, Conflict } from '../../utils/errors';
+import { NotFound, Conflict, Forbidden } from '../../utils/errors';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import { joinChannelRooms } from '../../infra/realtime';
 import type { CreateBranchInput, CreateClusterInput, UpdateClusterInput } from './admin.schema';
@@ -11,6 +11,27 @@ const BRANCH_SECTIONS = [
   'Service Updates',
   'Volunteer Opportunities',
 ];
+
+async function firstAdminBranch(userId: string) {
+  const membership = await prisma.branchMembership.findFirst({
+    where: { userId, role: 'ADMIN' },
+    orderBy: { joinedAt: 'asc' },
+    select: { branchId: true },
+  });
+  if (!membership) throw Forbidden('Branch admin only');
+  return membership.branchId;
+}
+
+async function resolveAdminBranchScope(userId: string, role: string, branchId?: string) {
+  if (role === 'SUPER_ADMIN') return branchId;
+  const targetBranchId = branchId ?? (await firstAdminBranch(userId));
+  const membership = await prisma.branchMembership.findUnique({
+    where: { userId_branchId: { userId, branchId: targetBranchId } },
+    select: { role: true },
+  });
+  if (membership?.role !== 'ADMIN') throw Forbidden('Only this branch admin can access this branch');
+  return targetBranchId;
+}
 
 export const adminService = {
   async analytics() {
@@ -183,6 +204,21 @@ export const adminService = {
     return { ok: true };
   },
 
+  async dashboardForAdmin(userId: string, role: string, branchId?: string) {
+    const scopedBranchId = await resolveAdminBranchScope(userId, role, branchId);
+    return this.branchDashboard(scopedBranchId);
+  },
+
+  async membersForAdmin(userId: string, role: string, branchId?: string, search?: string, cursor?: string, limit = 50) {
+    const scopedBranchId = await resolveAdminBranchScope(userId, role, branchId);
+    return this.branchMembers(scopedBranchId, search, cursor, limit);
+  },
+
+  async removeBranchMemberForAdmin(actorId: string, role: string, branchId: string, userId: string) {
+    await resolveAdminBranchScope(actorId, role, branchId);
+    return this.removeBranchMember(branchId, userId);
+  },
+
   async branchDashboard(branchId?: string) {
     let branchName = 'All Branches';
 
@@ -203,23 +239,32 @@ export const adminService = {
         pipelineRaw,
       ] = await Promise.all([
         branchId
-          ? prisma.branchMembership.count({ where: { branchId } })
+          ? prisma.branchMembership.count({ where: { branchId, user: { deletedAt: null } } })
           : prisma.user.count({ where: { deletedAt: null } }),
         prisma.growthStage.findMany({ orderBy: { order: 'asc' }, select: { id: true, name: true } }),
-        prisma.certificate.count({ where: { status: 'PENDING' } }),
+        prisma.certificate.count({
+          where: {
+            status: 'PENDING',
+            ...(branchId
+              ? { user: { deletedAt: null, branchMemberships: { some: { branchId } } } }
+              : { user: { deletedAt: null } }),
+          },
+        }),
         branchId
           ? prisma.$queryRaw<{ month: string; count: bigint }[]>`
               SELECT to_char("joinedAt", 'YYYY-MM') AS month, COUNT(*)::bigint AS count
-              FROM "BranchMembership"
-              WHERE "branchId" = ${branchId}
-                AND "joinedAt" >= NOW() - INTERVAL '6 months'
+              FROM "BranchMembership" bm
+              JOIN "User" u ON u."id" = bm."userId" AND u."deletedAt" IS NULL
+              WHERE bm."branchId" = ${branchId}
+                AND bm."joinedAt" >= NOW() - INTERVAL '6 months'
               GROUP BY month
               ORDER BY month ASC
             `
           : prisma.$queryRaw<{ month: string; count: bigint }[]>`
-              SELECT to_char("joinedAt", 'YYYY-MM') AS month, COUNT(*)::bigint AS count
-              FROM "BranchMembership"
-              WHERE "joinedAt" >= NOW() - INTERVAL '6 months'
+              SELECT to_char(bm."joinedAt", 'YYYY-MM') AS month, COUNT(*)::bigint AS count
+              FROM "BranchMembership" bm
+              JOIN "User" u ON u."id" = bm."userId" AND u."deletedAt" IS NULL
+              WHERE bm."joinedAt" >= NOW() - INTERVAL '6 months'
               GROUP BY month
               ORDER BY month ASC
             `,
@@ -242,6 +287,8 @@ export const adminService = {
       const pipelineMap = new Map(pipelineRaw.map((r) => [r.currentStageId, Number(r.count)]));
 
       return {
+        scope: branchId ? 'branch' : 'global',
+        branchId: branchId ?? null,
         branch: branchName,
         totalMembers,
         pendingCertificates: pendingCerts,

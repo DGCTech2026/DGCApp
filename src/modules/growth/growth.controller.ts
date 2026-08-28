@@ -19,16 +19,16 @@ export const growthController = {
   async listMyCertificates(req: Request, res: Response) {
     res.json(await growthService.listMyCertificates(req.user!.sub));
   },
-  async listPendingCertificates(_req: Request, res: Response) {
-    res.json(await growthService.listPendingCertificates());
+  async listPendingCertificates(req: Request, res: Response) {
+    res.json(await growthService.listPendingCertificates(req.user!.sub, req.user!.role));
   },
   async verifyCertificate(req: Request, res: Response) {
-    res.json(await growthService.verifyCertificate(req.user!.sub, req.params.id as string));
+    res.json(await growthService.verifyCertificate(req.user!.sub, req.user!.role, req.params.id as string));
   },
   async rejectCertificate(req: Request, res: Response) {
-    res.json(await growthService.rejectCertificate(req.user!.sub, req.params.id as string, req.body.reason));
+    res.json(await growthService.rejectCertificate(req.user!.sub, req.user!.role, req.params.id as string, req.body.reason));
   },
   async adminVerifyRequirement(req: Request, res: Response) {
-    res.json(await growthService.adminVerifyRequirement(req.user!.sub, req.body.userId, req.body.requirementKey));
+    res.json(await growthService.adminVerifyRequirement(req.user!.sub, req.user!.role, req.body.userId, req.body.requirementKey));
   },
 };

@@ -33,24 +33,33 @@ export const adminController = {
   async unarchiveCluster(req: Request, res: Response) {
     res.json(await adminService.setClusterArchived(req.params.clusterId as string, false));
   },
-  async globalDashboard(_req: Request, res: Response) {
-    res.json(await adminService.branchDashboard());
+  async globalDashboard(req: Request, res: Response) {
+    res.json(await adminService.dashboardForAdmin(req.user!.sub, req.user!.role));
   },
   async globalMembers(req: Request, res: Response) {
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
-    res.json(await adminService.branchMembers(undefined, search, cursor));
+    res.json(await adminService.membersForAdmin(req.user!.sub, req.user!.role, undefined, search, cursor));
   },
   async branchDashboard(req: Request, res: Response) {
-    res.json(await adminService.branchDashboard(req.params.branchId as string));
+    res.json(await adminService.dashboardForAdmin(req.user!.sub, req.user!.role, req.params.branchId as string));
   },
   async branchMembers(req: Request, res: Response) {
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
-    res.json(await adminService.branchMembers(req.params.branchId as string, search, cursor));
+    res.json(
+      await adminService.membersForAdmin(req.user!.sub, req.user!.role, req.params.branchId as string, search, cursor),
+    );
   },
   async removeBranchMember(req: Request, res: Response) {
-    res.json(await adminService.removeBranchMember(req.params.branchId as string, req.params.userId as string));
+    res.json(
+      await adminService.removeBranchMemberForAdmin(
+        req.user!.sub,
+        req.user!.role,
+        req.params.branchId as string,
+        req.params.userId as string,
+      ),
+    );
   },
   async createCluster(req: Request, res: Response) {
     res.status(201).json(await adminService.createCluster(req.body));

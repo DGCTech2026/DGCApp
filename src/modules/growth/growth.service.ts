@@ -1,6 +1,26 @@
 import { prisma } from '../../infra/db';
 import { growthEngine } from './growth.engine';
-import { NotFound, BadRequest } from '../../utils/errors';
+import { NotFound, BadRequest, Forbidden } from '../../utils/errors';
+
+async function adminBranchIds(adminId: string, role: string): Promise<string[] | null> {
+  if (role === 'SUPER_ADMIN') return null;
+  const memberships = await prisma.branchMembership.findMany({
+    where: { userId: adminId, role: 'ADMIN' },
+    select: { branchId: true },
+  });
+  if (!memberships.length) throw Forbidden('Super admin or branch admin only');
+  return memberships.map((m) => m.branchId);
+}
+
+async function assertCanManageUserGrowth(adminId: string, role: string, userId: string) {
+  const branchIds = await adminBranchIds(adminId, role);
+  if (!branchIds) return;
+  const membership = await prisma.branchMembership.findFirst({
+    where: { userId, branchId: { in: branchIds }, user: { deletedAt: null } },
+    select: { id: true },
+  });
+  if (!membership) throw Forbidden('Only branch admins can manage members in their branch');
+}
 
 export const growthService = {
   // "My Journey": current stage, progress %, next action, the full pipeline, current-stage
@@ -121,28 +141,43 @@ export const growthService = {
   },
 
   // ---- admin: certificate verification queue (PRD §13) ----
-  async listPendingCertificates() {
+  async listPendingCertificates(adminId: string, role: string) {
+    const branchIds = await adminBranchIds(adminId, role);
     return prisma.certificate.findMany({
-      where: { status: 'PENDING' },
+      where: {
+        status: 'PENDING',
+        user: {
+          deletedAt: null,
+          ...(branchIds ? { branchMemberships: { some: { branchId: { in: branchIds } } } } : {}),
+        },
+      },
       orderBy: { submittedAt: 'asc' },
       select: {
         id: true,
         title: true,
         fileUrl: true,
         submittedAt: true,
-        user: { select: { id: true, displayName: true, email: true } },
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true,
+            branchMemberships: { select: { branch: { select: { id: true, name: true } }, role: true } },
+          },
+        },
         requirement: { select: { key: true, label: true } },
       },
     });
   },
 
-  async verifyCertificate(adminId: string, certId: string) {
+  async verifyCertificate(adminId: string, role: string, certId: string) {
     const cert = await prisma.certificate.findUnique({
       where: { id: certId },
       select: { status: true, userId: true, requirementId: true },
     });
     if (!cert) throw NotFound('Certificate not found');
     if (cert.status !== 'PENDING') throw BadRequest('Certificate already processed');
+    await assertCanManageUserGrowth(adminId, role, cert.userId);
     await prisma.certificate.update({
       where: { id: certId },
       data: { status: 'VERIFIED', verifiedById: adminId, verifiedAt: new Date() },
@@ -155,10 +190,11 @@ export const growthService = {
     return { ok: true };
   },
 
-  async rejectCertificate(adminId: string, certId: string, reason?: string) {
-    const cert = await prisma.certificate.findUnique({ where: { id: certId }, select: { status: true } });
+  async rejectCertificate(adminId: string, role: string, certId: string, reason?: string) {
+    const cert = await prisma.certificate.findUnique({ where: { id: certId }, select: { status: true, userId: true } });
     if (!cert) throw NotFound('Certificate not found');
     if (cert.status !== 'PENDING') throw BadRequest('Certificate already processed');
+    await assertCanManageUserGrowth(adminId, role, cert.userId);
     await prisma.certificate.update({
       where: { id: certId },
       data: { status: 'REJECTED', verifiedById: adminId, verifiedAt: new Date(), rejectionReason: reason ?? null },
@@ -166,7 +202,8 @@ export const growthService = {
     return { ok: true };
   },
 
-  async adminVerifyRequirement(adminId: string, userId: string, requirementKey: string) {
+  async adminVerifyRequirement(adminId: string, role: string, userId: string, requirementKey: string) {
+    await assertCanManageUserGrowth(adminId, role, userId);
     const req = await prisma.growthRequirement.findUnique({
       where: { key: requirementKey },
       select: { id: true, type: true },

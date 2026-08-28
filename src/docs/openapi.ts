@@ -780,7 +780,7 @@ registry.registerPath({
   responses: { 200: { description: 'OK', ...json(okSchema) } },
 });
 
-// ---- admin (super admin only) ----
+// ---- admin ----
 registry.registerPath({
   method: 'get',
   path: '/api/v1/admin/analytics',
@@ -788,6 +788,23 @@ registry.registerPath({
   summary: 'Dashboard analytics: counts, branch + leadership-pipeline breakdowns',
   security: bearer,
   responses: { 200: { description: 'Analytics', ...json(z.object({}).passthrough()) }, 403: { description: 'Super admin only', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/dashboard',
+  tags: ['admin'],
+  summary: 'Admin dashboard. Super admins get global data; branch admins get their branch scope.',
+  security: bearer,
+  responses: { 200: { description: 'Dashboard', ...json(z.object({}).passthrough()) }, 403: { description: 'Admin only', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/members',
+  tags: ['admin'],
+  summary: 'Admin member list. Super admins get all members; branch admins get their branch members.',
+  security: bearer,
+  request: { query: z.object({ search: z.string().optional(), cursor: z.string().optional() }) },
+  responses: { 200: { description: 'Members + nextCursor', ...json(z.object({}).passthrough()) }, 403: { description: 'Admin only', ...json(errorSchema) } },
 });
 registry.registerPath({
   method: 'get',
@@ -842,6 +859,33 @@ registry.registerPath({
   security: bearer,
   request: { params: z.object({ branchId: z.string() }), body: json(assignUserSchema) },
   responses: { 200: { description: 'OK', ...json(okSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/branches/{branchId}/dashboard',
+  tags: ['admin'],
+  summary: 'Branch dashboard for a super admin or that branch admin',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string() }) },
+  responses: { 200: { description: 'Branch dashboard', ...json(z.object({}).passthrough()) }, 403: { description: 'Not this branch admin', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/branches/{branchId}/members',
+  tags: ['admin'],
+  summary: 'Branch members for a super admin or that branch admin',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string() }), query: z.object({ search: z.string().optional(), cursor: z.string().optional() }) },
+  responses: { 200: { description: 'Branch members + nextCursor', ...json(z.object({}).passthrough()) }, 403: { description: 'Not this branch admin', ...json(errorSchema) } },
+});
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/branches/{branchId}/members/{userId}/remove',
+  tags: ['admin'],
+  summary: 'Remove a member from a branch. Super admin or that branch admin only.',
+  security: bearer,
+  request: { params: z.object({ branchId: z.string(), userId: z.string() }) },
+  responses: { 200: { description: 'OK', ...json(okSchema) }, 403: { description: 'Not this branch admin', ...json(errorSchema) } },
 });
 registry.registerPath({
   method: 'post',
