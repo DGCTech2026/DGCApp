@@ -6,7 +6,13 @@ import { looksLikeRawApnsToken } from '../../utils/pushToken';
 import type { Message } from 'firebase-admin/messaging';
 
 type Platform = 'ANDROID' | 'IOS' | 'WEB';
-type PushPayload = { title: string; body?: string | null; data?: Record<string, unknown> };
+type PushPayload = {
+  title: string;
+  body?: string | null;
+  data?: Record<string, unknown>;
+  category?: string;
+  threadId?: string;
+};
 type IncomingCallPushPayload = PushPayload & { ttlMs?: number };
 type TokenMessage = Extract<Message, { token: string }>;
 type StoredDeviceToken = { token: string; platform: Platform };
@@ -67,8 +73,8 @@ async function sendApnsRows(rows: StoredDeviceToken[], p: PushPayload, options: 
     body: p.body,
     data: toStringMap(p.data),
     ttlMs: options.ttlMs,
-    category: options.category,
-    threadId: options.threadId,
+    category: options.category ?? p.category,
+    threadId: options.threadId ?? p.threadId,
   });
   const dead: string[] = [];
   for (const r of res) {
@@ -114,6 +120,8 @@ async function sendFcmRows(rows: StoredDeviceToken[], p: PushPayload) {
         aps: {
           alert: { title: p.title, ...(p.body ? { body: p.body } : {}) },
           sound: 'default',
+          ...(p.category ? { category: p.category } : {}),
+          ...(p.threadId ? { threadId: p.threadId } : {}),
           mutableContent: true,
         },
       },

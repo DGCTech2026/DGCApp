@@ -14,6 +14,16 @@ export const chatController = {
     if (!parsed.success) throw BadRequest(parsed.error.issues.map((i) => i.message).join(', '));
     res.json(await chatService.list(req.user!.sub, req.user!.role, req.params.channelId as string, parsed.data));
   },
+  async getOne(req: Request, res: Response) {
+    res.json(
+      await chatService.getOne(
+        req.user!.sub,
+        req.user!.role,
+        req.params.channelId as string,
+        req.params.messageId as string,
+      ),
+    );
+  },
   async addReaction(req: Request, res: Response) {
     res.json(await chatService.addReaction(req.user!.sub, req.user!.role, req.params.messageId as string, req.body.emoji));
   },

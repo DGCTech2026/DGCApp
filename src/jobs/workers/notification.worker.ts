@@ -26,6 +26,31 @@ function channelDisplayName(channel: {
   return channel.name ?? channel.cluster?.name ?? channel.branch?.name ?? 'Channel';
 }
 
+function messagePushData(input: {
+  channelId: string;
+  messageId: string;
+  senderName?: string;
+  channelName?: string;
+  notificationType?: 'MESSAGE' | 'MENTION' | 'ANNOUNCEMENT';
+  mentionEveryone?: boolean;
+}) {
+  const canQuickReply = input.notificationType !== 'ANNOUNCEMENT';
+  return {
+    type: 'message',
+    notificationType: input.notificationType ?? 'MESSAGE',
+    route: 'CHAT',
+    screen: 'CHAT',
+    clickAction: 'OPEN_CHAT',
+    channelId: input.channelId,
+    messageId: input.messageId,
+    deepLink: `dgc://channels/${input.channelId}/messages/${input.messageId}`,
+    ...(canQuickReply ? { quickReplyAction: 'MESSAGE_REPLY', notificationCategory: 'MESSAGE_REPLY' } : {}),
+    ...(input.senderName ? { senderName: input.senderName } : {}),
+    ...(input.channelName ? { channelName: input.channelName } : {}),
+    ...(input.mentionEveryone !== undefined ? { mentionEveryone: input.mentionEveryone ? 'true' : 'false' } : {}),
+  };
+}
+
 export const notificationWorker = new Worker(
   'notification',
   async (job) => {
@@ -197,14 +222,19 @@ export const notificationWorker = new Worker(
           type: 'ANNOUNCEMENT' as const,
           title,
           body: body ?? null,
-          data: { channelId, messageId },
+          data: messagePushData({ channelId, messageId, notificationType: 'ANNOUNCEMENT' }),
         }));
         const res = await prisma.notification.createMany({ data: chunk });
         created += res.count;
       }
       await pushService.sendToUsers(
         members.map((m) => m.userId),
-        { title, body: body ?? null, data: { channelId, messageId } },
+        {
+          title,
+          body: body ?? null,
+          data: messagePushData({ channelId, messageId, notificationType: 'ANNOUNCEMENT' }),
+          threadId: `channel:${channelId}`,
+        },
       );
       logger.info({ jobId: job.id, channelId, created }, 'Announcement fan-out complete');
       return;
@@ -245,7 +275,9 @@ export const notificationWorker = new Worker(
         {
           title: channelName,
           body: `${displaySender}: ${body || 'Sent a message'}`,
-          data: { channelId, messageId, channelName, senderName: displaySender },
+          data: messagePushData({ channelId, messageId, channelName, senderName: displaySender }),
+          category: 'MESSAGE_REPLY',
+          threadId: `channel:${channelId}`,
         },
       );
       return;
@@ -270,7 +302,9 @@ export const notificationWorker = new Worker(
         type: 'MESSAGE',
         title: senderName,
         body: body ?? 'Sent you a message',
-        data: { channelId, messageId },
+        data: messagePushData({ channelId, messageId, senderName }),
+        category: 'MESSAGE_REPLY',
+        threadId: `channel:${channelId}`,
       });
       return;
     }
@@ -299,7 +333,15 @@ export const notificationWorker = new Worker(
           type: 'MENTION',
           title,
           body: body ?? '',
-          data: { channelId, messageId, everyone: everyone ? 'true' : 'false' },
+          data: messagePushData({
+            channelId,
+            messageId,
+            senderName,
+            notificationType: 'MENTION',
+            mentionEveryone: everyone,
+          }),
+          category: 'MESSAGE_REPLY',
+          threadId: `channel:${channelId}`,
         });
       }
       return;

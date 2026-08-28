@@ -22,6 +22,7 @@ channelsRouter.delete('/:channelId/mute', authenticate, asyncHandler(channelCont
 channelsRouter.get('/:channelId/messages/pinned', authenticate, asyncHandler(channelController.pinnedMessages));
 channelsRouter.get('/:channelId/media', authenticate, asyncHandler(channelController.sharedMedia));
 channelsRouter.get('/:channelId/messages/search', authenticate, asyncHandler(chatController.search));
+channelsRouter.get('/:channelId/messages/:messageId', authenticate, asyncHandler(chatController.getOne));
 channelsRouter.get('/:channelId/messages', authenticate, asyncHandler(chatController.list));
 channelsRouter.post(
   '/:channelId/messages',

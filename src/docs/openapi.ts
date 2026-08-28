@@ -362,6 +362,18 @@ registry.registerPath({
   responses: { 200: { description: 'Messages + nextCursor', ...json(z.object({ messages: z.array(z.object({}).passthrough()), nextCursor: z.string().nullable() })) } },
 });
 registry.registerPath({
+  method: 'get',
+  path: '/api/v1/channels/{channelId}/messages/{messageId}',
+  tags: ['chat'],
+  summary: 'Get one message by id. Use after push tap when the message is not in local chat state yet.',
+  security: bearer,
+  request: { params: z.object({ channelId: z.string(), messageId: z.string() }) },
+  responses: {
+    200: { description: 'Message', ...json(z.object({}).passthrough()) },
+    404: { description: 'Not found', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
   method: 'post',
   path: '/api/v1/channels/{channelId}/messages',
   tags: ['chat'],
@@ -1313,6 +1325,14 @@ const apiDescription = [
   '| `audio-room:token` | listen | `{ roomId, appId, token, channel, uid }` (sent when promoted to speaker, or on step-down as an audience token) |',
   '',
   'Sending a message is a REST call (`POST /api/v1/channels/{channelId}/messages`); the server then broadcasts `message:new` to the channel room.',
+  '',
+  '### Message send UX contract',
+  '',
+  '- Always include a stable `clientMessageId` generated on the device before the first send attempt. Reuse the same `clientMessageId` on automatic retries. The backend returns the existing stored message on duplicate retries, so the UI can avoid double bubbles.',
+  '- Render an optimistic local message immediately with pending/clock state. Replace it when either the REST response or `message:new` arrives with the same `clientMessageId`; then show sent/delivered state.',
+  '- Message push payloads include `route=CHAT`, `screen=CHAT`, `channelId`, `messageId`, `deepLink`, `notificationCategory=MESSAGE_REPLY`, and `quickReplyAction=MESSAGE_REPLY`.',
+  '- On push tap, navigate to the channel in `channelId`. If `messageId` is not already in local state, call `GET /api/v1/channels/{channelId}/messages/{messageId}` and merge it into the list.',
+  '- For quick reply notification actions, send `POST /api/v1/channels/{channelId}/messages` with `{ "type": "TEXT", "body": "<reply>", "clientMessageId": "<local uuid>" }`.',
   '',
   '## DM Calls (Agora)',
   '',

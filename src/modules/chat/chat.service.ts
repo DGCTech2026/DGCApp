@@ -298,6 +298,16 @@ export const chatService = {
     return { messages: messages.map(withThumb), nextCursor: hasMore && last ? encodeCursor(last) : null, peerLastReadAt };
   },
 
+  async getOne(userId: string, role: string, channelId: string, messageId: string) {
+    await channelService.requireMember(userId, role, channelId);
+    const message = await prisma.message.findFirst({
+      where: { id: messageId, channelId, deletedAt: null },
+      select: MESSAGE_SELECT,
+    });
+    if (!message) throw NotFound('Message not found');
+    return withThumb(message);
+  },
+
   async addReaction(userId: string, role: string, messageId: string, emoji: string) {
     const msg = await prisma.message.findUnique({
       where: { id: messageId },

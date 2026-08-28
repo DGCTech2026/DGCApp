@@ -18,8 +18,18 @@ const SELECT = {
 
 export const notificationService = {
   // Create an in-app notification and push it live to the user's socket room.
-  // (FCM push fan-out is deferred — that goes through the notification BullMQ worker later.)
-  async notify(userId: string, input: { type: NotifType; title: string; body?: string; data?: Prisma.InputJsonValue }) {
+  // Push fan-out is best-effort: socket/in-app delivery should not fail because APNs/FCM is slow.
+  async notify(
+    userId: string,
+    input: {
+      type: NotifType;
+      title: string;
+      body?: string;
+      data?: Prisma.InputJsonValue;
+      category?: string;
+      threadId?: string;
+    },
+  ) {
     const n = await prisma.notification.create({
       data: {
         userId,
@@ -35,6 +45,8 @@ export const notificationService = {
       title: input.title,
       body: input.body ?? null,
       data: input.data as Record<string, unknown> | undefined,
+      category: input.category,
+      threadId: input.threadId,
     });
     return n;
   },
