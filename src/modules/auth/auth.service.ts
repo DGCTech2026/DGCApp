@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { OAuth2Client, type TokenPayload } from 'google-auth-library';
 import appleSignin from 'apple-signin-auth';
 import { prisma } from '../../infra/db';
@@ -8,7 +9,7 @@ import { isSmsConfigured } from '../../infra/sms';
 import { redis } from '../../infra/redis';
 import { logger } from '../../infra/logger';
 import { growthEngine } from '../growth/growth.engine';
-import { onboardToBranch } from '../users/users.service';
+import { hardDeleteUser, onboardToBranch } from '../users/users.service';
 import { isDisposableEmail } from '../../utils/email';
 import type { RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
@@ -49,6 +50,11 @@ const AUTH_USER_SELECT = {
   globalRole: true,
 } as const;
 
+type IdentityOwner = {
+  id: string;
+  deletedAt: Date | null;
+};
+
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -65,6 +71,39 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 function isLikelyInvalidGoogleToken(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   return /audience|issuer|expired|invalid token|wrong number of segments|no pem found|signature/i.test(message);
+}
+
+function isPrismaKnownError(err: unknown, code: string) {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === code;
+}
+
+async function purgeDeletedUsers(owners: Array<IdentityOwner | null | undefined>) {
+  const ids = [...new Set(owners.filter((owner) => owner?.deletedAt).map((owner) => owner!.id))];
+  for (const id of ids) {
+    try {
+      await hardDeleteUser(id);
+    } catch (err) {
+      if (!isPrismaKnownError(err, 'P2025')) throw err;
+    }
+  }
+}
+
+async function prepareRegistrationIdentities(email: string, phoneNumber?: string | null) {
+  const [emailOwner, phoneOwner] = await Promise.all([
+    prisma.user.findUnique({ where: { email }, select: { id: true, deletedAt: true } }),
+    phoneNumber
+      ? prisma.user.findUnique({ where: { phoneNumber }, select: { id: true, deletedAt: true } })
+      : Promise.resolve(null),
+  ]);
+
+  if (emailOwner && !emailOwner.deletedAt) {
+    throw Conflict('An account with this email already exists. Sign in instead.');
+  }
+  if (phoneOwner && !phoneOwner.deletedAt) {
+    throw Conflict('That phone number is already in use');
+  }
+
+  await purgeDeletedUsers([emailOwner, phoneOwner]);
 }
 
 async function verifyGoogleIdTokenWithRetry(idToken: string, audience: string) {
@@ -115,7 +154,10 @@ async function ensureUser(
     where,
     select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
   });
-  if (existing) return { user: existing, isNew: false };
+  if (existing) {
+    if (!existing.deletedAt) return { user: existing, isNew: false };
+    await purgeDeletedUsers([existing]);
+  }
 
   const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
   try {
@@ -125,12 +167,17 @@ async function ensureUser(
     });
     await growthEngine.enqueueRequirement(user.id, 'CREATE_ACCOUNT'); // AUTO (First Timer, §11)
     return { user, isNew: true };
-  } catch {
+  } catch (err) {
     // Race: created between our check and create — fetch and treat as existing.
-    const user = await prisma.user.findUniqueOrThrow({
+    const user = await prisma.user.findUnique({
       where,
       select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
     });
+    if (!user) throw err;
+    if (user.deletedAt) {
+      await purgeDeletedUsers([user]);
+      return ensureUser(where, create);
+    }
     return { user, isNew: false };
   }
 }
@@ -200,12 +247,12 @@ export const authService = {
     if (isDisposableEmail(email)) {
       throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
     }
-    // The duplicate check and the (CPU-bound) password hash don't depend on each other — overlap them.
-    const [existing, passwordHash] = await Promise.all([
-      prisma.user.findUnique({ where: { email }, select: { id: true } }),
+    // Release identities from soft-deleted accounts before creating the pending registration.
+    // Active owners still block signup; deleted owners should not trap users out of their email.
+    const [, passwordHash] = await Promise.all([
+      prepareRegistrationIdentities(email, input.phoneNumber ?? null),
       hashValue(input.password),
     ]);
-    if (existing) throw Conflict('An account with this email already exists. Sign in instead.');
 
     const pending = {
       passwordHash,
@@ -262,6 +309,7 @@ export const authService = {
       };
       const firstTimer = await prisma.growthStage.findUnique({ where: { key: 'FIRST_TIMER' } });
       let user: TokenUser;
+      await prepareRegistrationIdentities(id, pending.phoneNumber);
       try {
         user = await prisma.user.create({
           data: {
@@ -321,8 +369,18 @@ export const authService = {
         select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
       });
       if (!existing) throw Unauthorized('Account not found');
-      user = existing;
-      isNew = false;
+      if (existing.deletedAt) {
+        await purgeDeletedUsers([existing]);
+        const res = await ensureUser(
+          { email },
+          { email, displayName: payload.name ?? null, avatarUrl: payload.picture ?? null },
+        );
+        user = res.user;
+        isNew = res.isNew;
+      } else {
+        user = existing;
+        isNew = false;
+      }
     } else {
       const res = await ensureUser(
         { email },
@@ -370,8 +428,17 @@ export const authService = {
         select: { id: true, email: true, globalRole: true, suspendedAt: true, deletedAt: true },
       });
       if (!existing) throw Unauthorized('Account not found');
-      user = existing;
-      isNew = false;
+      if (existing.deletedAt) {
+        await purgeDeletedUsers([existing]);
+        if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
+        const email = norm(claims.email);
+        const res = await ensureUser({ email }, { email, displayName: displayName ?? null });
+        user = res.user;
+        isNew = res.isNew;
+      } else {
+        user = existing;
+        isNew = false;
+      }
     } else {
       // First-time Apple sign-in for this subject → we need the email to provision/link.
       if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');

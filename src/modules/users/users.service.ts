@@ -21,6 +21,26 @@ const ME_SELECT = {
   createdAt: true,
 } as const;
 
+export async function hardDeleteUser(userId: string) {
+  const channelIds = (
+    await prisma.channelMembership.findMany({ where: { userId }, select: { channelId: true } })
+  ).map((c) => c.channelId);
+
+  const branchIds = (
+    await prisma.branchMembership.findMany({ where: { userId }, select: { branchId: true } })
+  ).map((m) => m.branchId);
+
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.message.deleteMany({ where: { senderId: userId } });
+      await tx.user.delete({ where: { id: userId } });
+    },
+    { timeout: 20000, maxWait: 10000 },
+  );
+
+  return { channelIds, branchIds };
+}
+
 // PRD §2: selecting a branch auto-joins the branch community + Global Announcement channel.
 // Exported so registration (auth.service) can reuse the exact same onboarding.
 export async function onboardToBranch(userId: string, branchId: string) {
@@ -54,7 +74,11 @@ export async function onboardToBranch(userId: string, branchId: string) {
     { timeout: 20000, maxWait: 10000 },
   );
   await prisma.user.updateMany({ where: { id: userId, onboardedAt: null }, data: { onboardedAt: new Date() } });
-  await invalidate(...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]));
+  await invalidate(
+    cacheKeys.adminDashboard('global'),
+    cacheKeys.adminDashboard(branchId),
+    ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
+  );
   joinChannelRooms(userId, channelIds);
   await growthEngine.enqueueRequirement(userId, 'JOIN_BRANCH'); // AUTO (First Timer, §11)
 }
@@ -160,17 +184,7 @@ export const userService = {
   // Self-delete (hard purge) — removes the account + its data and frees the email/phone for reuse.
   // Handy for testing; also a legit "delete my account" action.
   async deleteMe(userId: string) {
-    const channelIds = (
-      await prisma.channelMembership.findMany({ where: { userId }, select: { channelId: true } })
-    ).map((c) => c.channelId);
-
-    await prisma.$transaction(
-      async (tx) => {
-        await tx.message.deleteMany({ where: { senderId: userId } });
-        await tx.user.delete({ where: { id: userId } });
-      },
-      { timeout: 20000, maxWait: 10000 },
-    );
+    const { channelIds, branchIds } = await hardDeleteUser(userId);
 
     await invalidate(
       cacheKeys.userProfile(userId),
@@ -178,6 +192,7 @@ export const userService = {
       cacheKeys.branches,
       cacheKeys.adminDashboard('global'),
       cacheKeys.adminAnalytics,
+      ...branchIds.map((id) => cacheKeys.adminDashboard(id)),
       ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
     );
 
