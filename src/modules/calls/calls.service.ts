@@ -89,6 +89,10 @@ function callData(call: CallRecord, action: 'incoming' | 'answered' | 'declined'
   return {
     type: 'call',
     notificationType: 'CALL',
+    route: 'CALL',
+    screen: action === 'incoming' ? 'INCOMING_CALL' : 'CALL_DETAIL',
+    clickAction: action === 'incoming' ? 'INCOMING_CALL' : 'OPEN_CALL',
+    androidChannelId: 'calls',
     callAction: action,
     callId: call.id,
     channelId: call.channelId,
@@ -101,6 +105,7 @@ function callData(call: CallRecord, action: 'incoming' | 'answered' | 'declined'
     callerAvatarUrl: call.caller.avatarUrl ?? '',
     createdAt: call.createdAt.toISOString(),
     expiresAt: ringingExpiresAt(call).toISOString(),
+    deepLink: `dgc://channels/${call.channelId}/calls/${call.id}`,
   };
 }
 

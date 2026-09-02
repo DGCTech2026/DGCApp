@@ -11,7 +11,7 @@ import { logger } from '../../infra/logger';
 import { growthEngine } from '../growth/growth.engine';
 import { hardDeleteUser, onboardToBranch } from '../users/users.service';
 import { isDisposableEmail } from '../../utils/email';
-import type { RegisterInput } from './auth.schema';
+import type { AppleAuthInput, RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
 import { hashValue, verifyHash, sha256, verifyTokenHash } from '../../utils/hash';
@@ -48,6 +48,7 @@ const AUTH_USER_SELECT = {
   displayName: true,
   avatarUrl: true,
   globalRole: true,
+  onboardedAt: true,
 } as const;
 
 type IdentityOwner = {
@@ -75,6 +76,24 @@ function isLikelyInvalidGoogleToken(err: unknown) {
 
 function isPrismaKnownError(err: unknown, code: string) {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === code;
+}
+
+function cleanDisplayName(value?: string | null) {
+  const name = value?.trim();
+  return name ? name.slice(0, 100) : null;
+}
+
+function appleDisplayName(input: AppleAuthInput) {
+  const explicit = cleanDisplayName(input.displayName);
+  if (explicit) return explicit;
+
+  const parts = [
+    input.givenName ?? input.fullName?.givenName,
+    input.fullName?.middleName,
+    input.familyName ?? input.fullName?.familyName,
+  ].map(cleanDisplayName).filter(Boolean);
+  const name = parts.join(' ').trim();
+  return name ? name.slice(0, 100) : cleanDisplayName(input.fullName?.nickname);
 }
 
 async function purgeDeletedUsers(owners: Array<IdentityOwner | null | undefined>) {
@@ -141,7 +160,10 @@ async function issueTokensFor(user: TokenUser) {
     prisma.refreshToken.create({ data: { id: jti, userId: user.id, hash: sha256(refreshToken) } }),
     prisma.user.findUnique({ where: { id: user.id }, select: AUTH_USER_SELECT }),
   ]);
-  return { accessToken, refreshToken, user: profile };
+  const authUser = profile
+    ? { ...profile, onboardingComplete: Boolean(profile.onboardedAt), onboardedAt: undefined }
+    : null;
+  return { accessToken, refreshToken, user: authUser };
 }
 
 // Every account starts at the First Timer growth stage (PRD §11 Stage 1).
@@ -401,7 +423,9 @@ export const authService = {
     return { ...(await issueTokensFor(user)), isNewUser: isNew };
   },
 
-  async appleAuth(idToken: string, displayName?: string) {
+  async appleAuth(input: AppleAuthInput) {
+    const { idToken } = input;
+    const displayName = appleDisplayName(input);
     if (!env.APPLE_CLIENT_ID) throw BadRequest('Apple sign-in is not configured');
     let claims: { sub?: string; email?: string; email_verified?: string | boolean };
     try {
@@ -432,7 +456,7 @@ export const authService = {
         await purgeDeletedUsers([existing]);
         if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
         const email = norm(claims.email);
-        const res = await ensureUser({ email }, { email, displayName: displayName ?? null });
+        const res = await ensureUser({ email }, { email, displayName });
         user = res.user;
         isNew = res.isNew;
       } else {
@@ -443,9 +467,16 @@ export const authService = {
       // First-time Apple sign-in for this subject → we need the email to provision/link.
       if (!claims.email) throw BadRequest('Apple did not provide an email; cannot create account');
       const email = norm(claims.email);
-      const res = await ensureUser({ email }, { email, displayName: displayName ?? null });
+      const res = await ensureUser({ email }, { email, displayName });
       user = res.user;
       isNew = res.isNew;
+    }
+
+    if (displayName) {
+      await prisma.user.updateMany({
+        where: { id: user.id, displayName: null },
+        data: { displayName },
+      });
     }
 
     await prisma.authProvider.upsert({

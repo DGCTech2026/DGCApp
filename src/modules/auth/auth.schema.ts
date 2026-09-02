@@ -13,6 +13,16 @@ export const googleAuthSchema = z.object({ idToken: z.string().min(1) });
 export const appleAuthSchema = z.object({
   idToken: z.string().min(1),
   displayName: z.string().min(1).max(100).optional(),
+  givenName: z.string().min(1).max(100).optional(),
+  familyName: z.string().min(1).max(100).optional(),
+  fullName: z
+    .object({
+      givenName: z.string().min(1).max(100).nullable().optional(),
+      familyName: z.string().min(1).max(100).nullable().optional(),
+      middleName: z.string().min(1).max(100).nullable().optional(),
+      nickname: z.string().min(1).max(100).nullable().optional(),
+    })
+    .optional(),
 });
 
 // Registration (single submit of the Create Account form; then verify the emailed code)
@@ -32,6 +42,7 @@ export const verifyOtpUnifiedSchema = z.object({
   code: z.string().length(6),
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
+export type AppleAuthInput = z.infer<typeof appleAuthSchema>;
 
 // Password
 export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });

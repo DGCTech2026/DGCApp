@@ -33,6 +33,57 @@ async function resolveAdminBranchScope(userId: string, role: string, branchId?: 
   return targetBranchId;
 }
 
+async function ensureUserExists(userId: string) {
+  const user = await prisma.user.findFirst({
+    where: { id: userId, deletedAt: null },
+    select: { id: true, globalRole: true },
+  });
+  if (!user) throw NotFound('User not found');
+  return user;
+}
+
+function assertBranchAdminCanManageTarget(actorRole: string, target: { globalRole: string }) {
+  if (actorRole !== 'SUPER_ADMIN' && target.globalRole !== 'MEMBER') {
+    throw Forbidden('Branch admins can only manage member accounts');
+  }
+}
+
+async function branchAdminBranchIds(userId: string) {
+  const memberships = await prisma.branchMembership.findMany({
+    where: { userId, role: 'ADMIN' },
+    select: { branchId: true },
+  });
+  if (!memberships.length) throw Forbidden('Super admin or branch admin only');
+  return memberships.map((m) => m.branchId);
+}
+
+async function assertCanPromoteBranchAdmin(actorId: string, actorRole: string, branchId: string, targetUserId: string) {
+  if (actorRole === 'SUPER_ADMIN') return { canCreateBranchMembership: true };
+
+  await resolveAdminBranchScope(actorId, actorRole, branchId);
+  const targetMembership = await prisma.branchMembership.findUnique({
+    where: { userId_branchId: { userId: targetUserId, branchId } },
+    select: { id: true },
+  });
+  if (!targetMembership) {
+    throw Forbidden('Branch admins can only promote existing members of their own branch');
+  }
+  return { canCreateBranchMembership: false };
+}
+
+async function assertCanAssignClusterModerator(actorId: string, actorRole: string, targetUserId: string) {
+  if (actorRole === 'SUPER_ADMIN') return;
+
+  const branchIds = await branchAdminBranchIds(actorId);
+  const targetMembership = await prisma.branchMembership.findFirst({
+    where: { userId: targetUserId, branchId: { in: branchIds } },
+    select: { id: true },
+  });
+  if (!targetMembership) {
+    throw Forbidden('Branch admins can only appoint cluster moderators from their own branch members');
+  }
+}
+
 export const adminService = {
   async analytics() {
     return cached(cacheKeys.adminAnalytics, 60, async () => {
@@ -156,19 +207,29 @@ export const adminService = {
     return branch;
   },
 
-  async assignBranchAdmin(branchId: string, userId: string) {
+  async assignBranchAdmin(actorId: string, actorRole: string, branchId: string, userId: string) {
     const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { id: true } });
     if (!branch) throw NotFound('Branch not found');
+    const target = await ensureUserExists(userId);
+    assertBranchAdminCanManageTarget(actorRole, target);
+    const { canCreateBranchMembership } = await assertCanPromoteBranchAdmin(actorId, actorRole, branchId, userId);
 
     const branchChannels = await prisma.channel.findMany({ where: { branchId }, select: { id: true } });
     const channelIds = branchChannels.map((c) => c.id);
 
     await prisma.$transaction(async (tx) => {
-      await tx.branchMembership.upsert({
-        where: { userId_branchId: { userId, branchId } },
-        create: { userId, branchId, role: 'ADMIN' },
-        update: { role: 'ADMIN' },
-      });
+      if (canCreateBranchMembership) {
+        await tx.branchMembership.upsert({
+          where: { userId_branchId: { userId, branchId } },
+          create: { userId, branchId, role: 'ADMIN' },
+          update: { role: 'ADMIN' },
+        });
+      } else {
+        await tx.branchMembership.update({
+          where: { userId_branchId: { userId, branchId } },
+          data: { role: 'ADMIN' },
+        });
+      }
       if (channelIds.length) {
         await tx.channelMembership.createMany({
           data: channelIds.map((channelId) => ({ userId, channelId })),
@@ -178,21 +239,47 @@ export const adminService = {
     });
 
     await invalidate(
+      cacheKeys.adminDashboard('global'),
+      cacheKeys.adminDashboard(branchId),
+      cacheKeys.adminAnalytics,
       ...channelIds.flatMap((id) => [cacheKeys.channelMembers(id), cacheKeys.channelMeta(id)]),
     );
     joinChannelRooms(userId, channelIds);
     return { ok: true };
   },
 
-  async assignClusterModerator(clusterId: string, userId: string) {
+  async assignClusterModerator(actorId: string, actorRole: string, clusterId: string, userId: string) {
     const cluster = await prisma.cluster.findUnique({ where: { id: clusterId }, select: { id: true } });
     if (!cluster) throw NotFound('Cluster not found');
-    await prisma.clusterMembership.upsert({
-      where: { userId_clusterId: { userId, clusterId } },
-      create: { userId, clusterId, role: 'MODERATOR' },
-      update: { role: 'MODERATOR' },
+    const target = await ensureUserExists(userId);
+    assertBranchAdminCanManageTarget(actorRole, target);
+    await assertCanAssignClusterModerator(actorId, actorRole, userId);
+    const channel = await prisma.channel.findFirst({
+      where: { type: 'CLUSTER', clusterId },
+      select: { id: true },
     });
-    await invalidate(cacheKeys.clusters);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.clusterMembership.upsert({
+        where: { userId_clusterId: { userId, clusterId } },
+        create: { userId, clusterId, role: 'MODERATOR' },
+        update: { role: 'MODERATOR' },
+      });
+      if (channel) {
+        await tx.channelMembership.upsert({
+          where: { userId_channelId: { userId, channelId: channel.id } },
+          create: { userId, channelId: channel.id, role: 'MODERATOR' },
+          update: { role: 'MODERATOR' },
+        });
+      }
+    });
+    await invalidate(
+      cacheKeys.clusters,
+      cacheKeys.adminDashboard('global'),
+      cacheKeys.adminAnalytics,
+      ...(channel ? [cacheKeys.channelMembers(channel.id), cacheKeys.channelMeta(channel.id)] : []),
+    );
+    if (channel) joinChannelRooms(userId, [channel.id]);
     return { ok: true };
   },
 

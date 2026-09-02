@@ -12,6 +12,9 @@ type PushPayload = {
   data?: Record<string, unknown>;
   category?: string;
   threadId?: string;
+  androidChannelId?: string;
+  clickAction?: string;
+  tag?: string;
 };
 type IncomingCallPushPayload = PushPayload & { ttlMs?: number };
 type TokenMessage = Extract<Message, { token: string }>;
@@ -39,6 +42,32 @@ function toStringMap(data?: Record<string, unknown>): Record<string, string> {
     if (value !== undefined) out[k] = value;
   }
   return out;
+}
+
+function pushData(p: PushPayload): Record<string, string> {
+  return toStringMap({
+    ...(p.category ? { notificationCategory: p.category } : {}),
+    ...(p.threadId ? { threadId: p.threadId } : {}),
+    ...p.data,
+  });
+}
+
+function defaultAndroidChannelId(data: Record<string, string>, p: PushPayload): string | undefined {
+  if (p.androidChannelId) return p.androidChannelId;
+  if (data['androidChannelId']) return data['androidChannelId'];
+  if (p.category === 'MESSAGE_REPLY' || data['route'] === 'CHAT') return 'messages';
+  if (data['route'] === 'AUDIO_ROOM' || data['route'] === 'PRAYER_WATCH') return 'audio_rooms';
+  if (data['route'] === 'EVENT') return 'events';
+  if (data['route'] === 'CALL') return 'calls';
+  return undefined;
+}
+
+function androidClickAction(data: Record<string, string>, p: PushPayload): string | undefined {
+  return p.clickAction ?? data['clickAction'] ?? data['click_action'];
+}
+
+function androidTag(data: Record<string, string>, p: PushPayload): string | undefined {
+  return p.tag ?? data['notificationTag'] ?? data['callId'] ?? data['roomId'] ?? data['eventId'] ?? data['messageId'];
 }
 
 function isDeadTokenError(code?: string, message?: string): boolean {
@@ -71,7 +100,7 @@ async function sendApnsRows(rows: StoredDeviceToken[], p: PushPayload, options: 
   const res = await sendApnsAlerts(tokens, {
     title: p.title,
     body: p.body,
-    data: toStringMap(p.data),
+    data: pushData(p),
     ttlMs: options.ttlMs,
     category: options.category ?? p.category,
     threadId: options.threadId ?? p.threadId,
@@ -110,10 +139,28 @@ async function sendFcmRows(rows: StoredDeviceToken[], p: PushPayload) {
     return;
   }
   const tokens = rows.map((row) => row.token);
+  const data = pushData(p);
+  const clickAction = androidClickAction(data, p);
+  const channelId = defaultAndroidChannelId(data, p);
+  const tag = androidTag(data, p);
   const res = await fcm().sendEachForMulticast({
     tokens,
     notification: { title: p.title, ...(p.body ? { body: p.body } : {}) },
-    data: toStringMap(p.data),
+    data,
+    android: {
+      priority: 'high',
+      data,
+      notification: {
+        title: p.title,
+        ...(p.body ? { body: p.body } : {}),
+        ...(channelId ? { channelId } : {}),
+        ...(clickAction ? { clickAction } : {}),
+        ...(tag ? { tag } : {}),
+        priority: 'high',
+        defaultSound: true,
+        visibility: 'private',
+      },
+    },
     apns: {
       headers: { 'apns-push-type': 'alert', 'apns-priority': '10' },
       payload: {

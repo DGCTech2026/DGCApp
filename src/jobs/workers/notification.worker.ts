@@ -41,6 +41,7 @@ function messagePushData(input: {
     route: 'CHAT',
     screen: 'CHAT',
     clickAction: 'OPEN_CHAT',
+    androidChannelId: 'messages',
     channelId: input.channelId,
     messageId: input.messageId,
     deepLink: `dgc://channels/${input.channelId}/messages/${input.messageId}`,
@@ -48,6 +49,33 @@ function messagePushData(input: {
     ...(input.senderName ? { senderName: input.senderName } : {}),
     ...(input.channelName ? { channelName: input.channelName } : {}),
     ...(input.mentionEveryone !== undefined ? { mentionEveryone: input.mentionEveryone ? 'true' : 'false' } : {}),
+  };
+}
+
+function prayerWatchPushData(roomId: string, channelId?: string | null) {
+  return {
+    type: 'prayer_watch',
+    notificationType: 'SYSTEM',
+    route: 'PRAYER_WATCH',
+    screen: 'PRAYER_WATCH',
+    clickAction: 'OPEN_PRAYER_WATCH',
+    androidChannelId: 'audio_rooms',
+    roomId,
+    ...(channelId ? { channelId } : {}),
+    deepLink: `dgc://prayer-watch/rooms/${roomId}`,
+  };
+}
+
+function audioRoomPushData(roomId: string) {
+  return {
+    type: 'audio_room',
+    notificationType: 'SYSTEM',
+    route: 'AUDIO_ROOM',
+    screen: 'AUDIO_ROOM',
+    clickAction: 'OPEN_AUDIO_ROOM',
+    androidChannelId: 'audio_rooms',
+    roomId,
+    deepLink: `dgc://audio-rooms/${roomId}`,
   };
 }
 
@@ -143,8 +171,12 @@ export const notificationWorker = new Worker(
         data: {
           type: 'call',
           notificationType: 'CALL',
+          route: 'CALL',
+          screen: 'CHANNEL_CALL',
           callAction: 'incoming',
           callKind: 'CHANNEL_AUDIO_ROOM',
+          clickAction: 'INCOMING_CALL',
+          androidChannelId: 'calls',
           callId: roomId,
           roomId,
           channelId,
@@ -156,6 +188,7 @@ export const notificationWorker = new Worker(
           callerAvatarUrl: startedByAvatarUrl ?? '',
           createdAt,
           expiresAt: expiresAt.toISOString(),
+          deepLink: `dgc://channels/${channelId}/calls/${roomId}`,
         },
       });
       logger.info({ jobId: job.id, roomId, channelId, notified: userIds.length }, 'Channel call ring fan-out complete');
@@ -166,11 +199,20 @@ export const notificationWorker = new Worker(
     // "Prayer Watch is live — tap to join". Also drops a notification row so it appears in the
     // in-app notification center. Batched at BATCH so a 100k-user org doesn't OOM.
     if (job.name === 'prayer-watch-live-fanout') {
-      const { roomId, title, startedById } = job.data as { roomId: string; title: string; startedById: string };
+      const { roomId, title, startedById, channelId: queuedChannelId } = job.data as {
+        roomId: string;
+        title: string;
+        startedById: string;
+        channelId?: string;
+      };
+      const channelId = queuedChannelId ?? (await prisma.channel.findFirst({
+        where: { type: 'GLOBAL_PRAYER_WATCH' },
+        select: { id: true },
+      }))?.id;
       const payload = {
         title: 'Prayer Watch is live',
         body: `${title} — tap to join the ongoing prayer`,
-        data: { type: 'prayer_watch', notificationType: 'SYSTEM', roomId },
+        data: prayerWatchPushData(roomId, channelId),
       };
       let cursor: string | undefined;
       let notified = 0;
@@ -192,7 +234,7 @@ export const notificationWorker = new Worker(
           data: ids.map((userId) => ({ userId, type: 'SYSTEM' as const, ...payload })),
           skipDuplicates: true,
         });
-        await pushService.sendToUsers(ids, payload);
+        await pushService.sendToUsers(ids, { ...payload, threadId: `prayer-watch:${roomId}` });
         notified += ids.length;
         cursor = users[users.length - 1]!.id;
         if (users.length < BATCH) break;
@@ -359,14 +401,15 @@ export const notificationWorker = new Worker(
           type: 'SYSTEM' as const,
           title: 'Audio room is live',
           body: title,
-          data: { roomId },
+          data: audioRoomPushData(roomId),
         }));
         await prisma.notification.createMany({ data: chunk });
       }
       await pushService.sendToUsers(userIds, {
         title: 'Audio room is live',
         body: title,
-        data: { roomId },
+        data: audioRoomPushData(roomId),
+        threadId: `audio-room:${roomId}`,
       });
       logger.info({ jobId: job.id, roomId, notified: userIds.length }, 'Audio room start notification complete');
       return;

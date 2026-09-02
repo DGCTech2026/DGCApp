@@ -78,6 +78,20 @@ function channelDisplayName(channel: {
   return channel.name ?? channel.cluster?.name ?? channel.branch?.name ?? 'Channel';
 }
 
+function audioRoomPushData(roomId: string, extra: Record<string, unknown> = {}) {
+  return {
+    type: 'audio_room',
+    notificationType: 'SYSTEM',
+    route: 'AUDIO_ROOM',
+    screen: 'AUDIO_ROOM',
+    clickAction: 'OPEN_AUDIO_ROOM',
+    androidChannelId: 'audio_rooms',
+    roomId,
+    deepLink: `dgc://audio-rooms/${roomId}`,
+    ...extra,
+  };
+}
+
 // Moderation gate. For general rooms it defers to canModerateScoped (super admin, room host,
 // branch admin for room's branch, cluster mod for room's cluster). For Prayer Watch — which is
 // org-wide with no branch/cluster of its own — it additionally accepts ANY admin/moderator
@@ -854,7 +868,7 @@ export const audioRoomService = {
         const payload = {
           title: `Starting soon: ${room.title}`,
           body: 'The room goes live in a few minutes — tap to be ready.',
-          data: { roomId: room.id, startsAt },
+          data: audioRoomPushData(room.id, { startsAt }),
         };
         for (let i = 0; i < attendeeIds.length; i += 1000) {
           const res = await prisma.notification.createMany({
@@ -866,19 +880,19 @@ export const audioRoomService = {
           });
           notified += res.count;
         }
-        await pushService.sendToUsers(attendeeIds, payload);
+        await pushService.sendToUsers(attendeeIds, { ...payload, threadId: `audio-room:${room.id}` });
       }
 
       // Host nudge — they're the one who has to press Start
       const hostPayload = {
         title: `Your room starts soon: ${room.title}`,
         body: 'Open the app and tap Start when you are ready to go live.',
-        data: { roomId: room.id, startsAt },
+        data: audioRoomPushData(room.id, { startsAt, hostAction: 'START_ROOM' }),
       };
       await prisma.notification.create({
         data: { userId: room.hostId, type: 'SYSTEM', ...hostPayload },
       });
-      await pushService.sendToUser(room.hostId, hostPayload);
+      await pushService.sendToUser(room.hostId, { ...hostPayload, threadId: `audio-room:${room.id}` });
       notified += 1;
 
       await prisma.audioRoom.update({ where: { id: room.id }, data: { reminderSentAt: new Date() } });

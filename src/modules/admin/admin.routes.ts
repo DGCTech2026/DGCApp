@@ -16,7 +16,7 @@ adminRouter.post('/users/:userId/suspend', requireSuperAdmin, asyncHandler(admin
 adminRouter.post('/users/:userId/unsuspend', requireSuperAdmin, asyncHandler(adminController.unsuspend));
 adminRouter.post('/users/:userId/role', requireSuperAdmin, validate(setRoleSchema), asyncHandler(adminController.setRole));
 adminRouter.post('/branches', requireSuperAdmin, validate(createBranchSchema), asyncHandler(adminController.createBranch));
-adminRouter.post('/branches/:branchId/admins', requireSuperAdmin, validate(assignUserSchema), asyncHandler(adminController.assignBranchAdmin));
+adminRouter.post('/branches/:branchId/admins', authorize('branch', ['ADMIN']), validate(assignUserSchema), asyncHandler(adminController.assignBranchAdmin));
 
 // Admin panel. Super admin sees all branches; branch admins get their own branch scope.
 adminRouter.get('/dashboard', asyncHandler(adminController.globalDashboard));
@@ -36,7 +36,6 @@ adminRouter.post('/clusters', requireSuperAdmin, validate(createClusterSchema), 
 adminRouter.patch('/clusters/:clusterId', requireSuperAdmin, validate(updateClusterSchema), asyncHandler(adminController.updateCluster));
 adminRouter.post(
   '/clusters/:clusterId/moderators',
-  requireSuperAdmin,
   validate(assignUserSchema),
   asyncHandler(adminController.assignClusterModerator),
 );

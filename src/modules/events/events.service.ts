@@ -19,6 +19,20 @@ const EVENT_SELECT = {
   _count: { select: { rsvps: true } },
 };
 
+function eventPushData(eventId: string, startsAt: Date) {
+  return {
+    type: 'event',
+    notificationType: 'EVENT',
+    route: 'EVENT',
+    screen: 'EVENT_DETAIL',
+    clickAction: 'OPEN_EVENT',
+    androidChannelId: 'events',
+    eventId,
+    startsAt: startsAt.toISOString(),
+    deepLink: `dgc://events/${eventId}`,
+  };
+}
+
 // Who may create / edit / delete an event of a given scope:
 // branch event → branch ADMIN; cluster event → cluster MODERATOR; global → SUPER_ADMIN.
 async function assertCanManage(userId: string, role: string, branchId?: string | null, clusterId?: string | null) {
@@ -197,21 +211,24 @@ export const eventService = {
         select: { userId: true },
       });
       for (let i = 0; i < rsvps.length; i += 1000) {
+        const data = eventPushData(ev.id, ev.startsAt);
         const res = await prisma.notification.createMany({
           data: rsvps.slice(i, i + 1000).map((r) => ({
             userId: r.userId,
             type: 'EVENT' as const,
             title: `Upcoming: ${ev.title}`,
             body: 'Starts soon — tap for details.',
-            data: { eventId: ev.id, startsAt: ev.startsAt.toISOString() },
+            data,
           })),
         });
         notified += res.count;
       }
+      const data = eventPushData(ev.id, ev.startsAt);
       await pushService.sendToUsers(rsvps.map((r) => r.userId), {
         title: `Upcoming: ${ev.title}`,
         body: 'Starts soon — tap for details.',
-        data: { eventId: ev.id, startsAt: ev.startsAt.toISOString() },
+        data,
+        threadId: `event:${ev.id}`,
       });
       await prisma.event.update({ where: { id: ev.id }, data: { reminderSentAt: new Date() } });
     }

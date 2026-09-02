@@ -22,10 +22,24 @@ export const adminController = {
     res.status(201).json(await adminService.createBranch(req.body));
   },
   async assignBranchAdmin(req: Request, res: Response) {
-    res.json(await adminService.assignBranchAdmin(req.params.branchId as string, req.body.userId));
+    res.json(
+      await adminService.assignBranchAdmin(
+        req.user!.sub,
+        req.user!.role,
+        req.params.branchId as string,
+        req.body.userId,
+      ),
+    );
   },
   async assignClusterModerator(req: Request, res: Response) {
-    res.json(await adminService.assignClusterModerator(req.params.clusterId as string, req.body.userId));
+    res.json(
+      await adminService.assignClusterModerator(
+        req.user!.sub,
+        req.user!.role,
+        req.params.clusterId as string,
+        req.body.userId,
+      ),
+    );
   },
   async archiveCluster(req: Request, res: Response) {
     res.json(await adminService.setClusterArchived(req.params.clusterId as string, true));

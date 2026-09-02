@@ -75,7 +75,7 @@ export const prayerWatchService = {
   // can KICK disruptive participants (see audio-rooms.service.kick — canModerateRoom broadened
   // for PRAYER_WATCH to include any admin/mod).
   async start(userId: string, _role: string) {
-    await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
+    const channel = await findGlobalPrayerWatchChannel(); // ensures the channel exists — catches misconfigured envs
 
     // Cross-request mutex so two simultaneous starters don't both create a live room. The
     // check-then-create window at findLiveRoom() → audioRoom.create() is a classic TOCTOU
@@ -180,7 +180,7 @@ export const prayerWatchService = {
     enqueue(
       notificationQueue,
       'prayer-watch-live-fanout',
-      { roomId: room.id, title: room.title, startedById: userId },
+      { roomId: room.id, title: room.title, startedById: userId, channelId: channel.id },
       { jobId: `prayer-watch-live-${room.id}` },
     );
 

@@ -116,6 +116,12 @@ export const growthEngine = {
           title: `Congratulations — you're now a ${current.name}`,
           body,
           data: {
+            type: 'growth',
+            notificationType: 'GROWTH',
+            route: 'GROWTH',
+            screen: 'MY_JOURNEY',
+            clickAction: 'OPEN_GROWTH',
+            deepLink: 'dgc://growth',
             stageKey: current.key,
             stageName: current.name,
             ...(stageBadge ? { badgeName: stageBadge.name, badgeIcon: stageBadge.icon } : {}),
