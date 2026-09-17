@@ -15,6 +15,7 @@ import { audioRoomsRouter } from './modules/audio-rooms/audio-rooms.routes';
 import { bootstrapRouter } from './modules/bootstrap/bootstrap.routes';
 import { prayerWatchRouter } from './modules/prayer-watch/prayer-watch.routes';
 import { callsRouter, dmsRouter } from './modules/calls/calls.routes';
+import { moderationRouter } from './modules/moderation/moderation.routes';
 
 export const router = Router();
 
@@ -35,3 +36,4 @@ router.use('/admin', adminRouter);
 router.use('/announcements', announcementsRouter);
 router.use('/audio-rooms', audioRoomsRouter);
 router.use('/prayer-watch', prayerWatchRouter);
+router.use('/moderation', moderationRouter);

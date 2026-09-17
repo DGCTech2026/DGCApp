@@ -8,6 +8,7 @@ import { emitToChannel } from '../../infra/realtime';
 import { logger } from '../../infra/logger';
 import { BadRequest, NotFound, Forbidden } from '../../utils/errors';
 import { optimizeImage, thumbUrl } from '../../utils/cloudinaryUrl';
+import { moderationService } from '../moderation/moderation.service';
 import type { SendMessageInput, ListMessagesInput } from './chat.schema';
 
 const POLL_SELECT = {
@@ -264,13 +265,17 @@ export const chatService = {
   },
 
   async list(userId: string, role: string, channelId: string, opts: ListMessagesInput) {
-    await channelService.requireMember(userId, role, channelId);
+    const [, blockedIds] = await Promise.all([
+      channelService.requireMember(userId, role, channelId),
+      moderationService.getBlockedIds(userId),
+    ]);
     const c = opts.cursor ? decodeCursor(opts.cursor) : null;
     const [rows, channel] = await Promise.all([
       prisma.message.findMany({
         where: {
           channelId,
           deletedAt: null,
+          ...(blockedIds.size > 0 ? { senderId: { notIn: [...blockedIds] } } : {}),
           ...(c
             ? { OR: [{ createdAt: { lt: c.createdAt } }, { createdAt: c.createdAt, id: { lt: c.id } }] }
             : {}),
@@ -414,9 +419,17 @@ export const chatService = {
 
   // Search a channel's messages (PRD §7). Case-insensitive substring on the body.
   async search(userId: string, role: string, channelId: string, q: string) {
-    await channelService.requireMember(userId, role, channelId);
+    const [, blockedIds] = await Promise.all([
+      channelService.requireMember(userId, role, channelId),
+      moderationService.getBlockedIds(userId),
+    ]);
     const rows = await prisma.message.findMany({
-      where: { channelId, deletedAt: null, body: { contains: q, mode: 'insensitive' } },
+      where: {
+        channelId,
+        deletedAt: null,
+        body: { contains: q, mode: 'insensitive' },
+        ...(blockedIds.size > 0 ? { senderId: { notIn: [...blockedIds] } } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 30,
       select: MESSAGE_SELECT,

@@ -43,26 +43,35 @@ export const channelService = {
     if (memberships.length === 0) return [];
     const channelIds = memberships.map((m) => m.channel.id);
 
-    const unreadRows = await prisma.$queryRaw<{ channelId: string; count: number }[]>`
-      SELECT cm."channelId", COUNT(m."id")::int AS count
-      FROM "ChannelMembership" cm
-      JOIN "Message" m
-        ON m."channelId" = cm."channelId"
-       AND m."deletedAt" IS NULL
-       AND m."senderId" <> cm."userId"
-       AND (cm."lastReadAt" IS NULL OR m."createdAt" > cm."lastReadAt")
-      WHERE cm."userId" = ${userId}
-      GROUP BY cm."channelId"`;
+    const [unreadRows, lastRows] = await Promise.all([
+      prisma.$queryRaw<{ channelId: string; count: number }[]>`
+        SELECT cm."channelId", COUNT(m."id")::int AS count
+        FROM "ChannelMembership" cm
+        JOIN "Message" m
+          ON m."channelId" = cm."channelId"
+         AND m."deletedAt" IS NULL
+         AND m."senderId" <> cm."userId"
+         AND (cm."lastReadAt" IS NULL OR m."createdAt" > cm."lastReadAt")
+        WHERE cm."userId" = ${userId}
+          AND NOT EXISTS (
+            SELECT 1 FROM "UserBlock" ub
+            WHERE ub."blockerId" = ${userId} AND ub."blockedId" = m."senderId"
+          )
+        GROUP BY cm."channelId"`,
+      prisma.$queryRaw<
+        { id: string; channelId: string; body: string | null; type: string; senderId: string; senderName: string | null; createdAt: Date }[]
+      >`
+        SELECT DISTINCT ON (m."channelId") m."id", m."channelId", m."body", m."type", m."senderId", u."displayName" AS "senderName", m."createdAt"
+        FROM "Message" m
+        JOIN "User" u ON u."id" = m."senderId"
+        WHERE m."channelId" IN (${Prisma.join(channelIds)}) AND m."deletedAt" IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM "UserBlock" ub
+            WHERE ub."blockerId" = ${userId} AND ub."blockedId" = m."senderId"
+          )
+        ORDER BY m."channelId", m."createdAt" DESC, m."id" DESC`,
+    ]);
     const unreadMap = new Map(unreadRows.map((r) => [r.channelId, r.count]));
-
-    const lastRows = await prisma.$queryRaw<
-      { id: string; channelId: string; body: string | null; type: string; senderId: string; senderName: string | null; createdAt: Date }[]
-    >`
-      SELECT DISTINCT ON (m."channelId") m."id", m."channelId", m."body", m."type", m."senderId", u."displayName" AS "senderName", m."createdAt"
-      FROM "Message" m
-      JOIN "User" u ON u."id" = m."senderId"
-      WHERE m."channelId" IN (${Prisma.join(channelIds)}) AND m."deletedAt" IS NULL
-      ORDER BY m."channelId", m."createdAt" DESC, m."id" DESC`;
     const lastMap = new Map(lastRows.map((r) => [r.channelId, r]));
 
     const dmIds = memberships.filter((m) => m.channel.type === 'DM').map((m) => m.channel.id);
@@ -139,8 +148,15 @@ export const channelService = {
   // Open (or return existing) a 1:1 DM channel.
   async openDm(userId: string, otherUserId: string) {
     if (userId === otherUserId) throw BadRequest('Cannot start a DM with yourself');
-    const other = await prisma.user.findUnique({ where: { id: otherUserId }, select: { id: true } });
+    const [other, blocked] = await Promise.all([
+      prisma.user.findUnique({ where: { id: otherUserId }, select: { id: true } }),
+      prisma.userBlock.findFirst({
+        where: { OR: [{ blockerId: userId, blockedId: otherUserId }, { blockerId: otherUserId, blockedId: userId }] },
+        select: { id: true },
+      }),
+    ]);
     if (!other) throw NotFound('User not found');
+    if (blocked) throw Forbidden('Cannot open a DM with a blocked user');
 
     const existing = await prisma.channel.findFirst({
       where: {
