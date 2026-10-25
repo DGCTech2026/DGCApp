@@ -1,5 +1,18 @@
-import { RateLimiterRedis } from 'rate-limiter-flexible';
+import { RateLimiterRedis, RateLimiterRes } from 'rate-limiter-flexible';
 import { redis } from './redis';
+import { logger } from './logger';
+
+// A store failure (timeout, dropped connection) is not a breached limit. Return null so the
+// caller continues. Throwing RateLimiterRes is unchanged: the caller still answers 429.
+export async function consumeWhenAvailable(limiter: RateLimiterRedis, key: string): Promise<RateLimiterRes | null> {
+  try {
+    return await limiter.consume(key);
+  } catch (err) {
+    if (err instanceof RateLimiterRes) throw err;
+    logger.warn({ err }, 'rate limiter unavailable; allowing request');
+    return null;
+  }
+}
 
 // Redis-backed OTP rate limits (CLAUDE.md §9). One Redis, keyed by purpose.
 

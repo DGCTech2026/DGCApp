@@ -3,7 +3,9 @@ import { Prisma } from '@prisma/client';
 import { OAuth2Client, type TokenPayload } from 'google-auth-library';
 import appleSignin from 'apple-signin-auth';
 import { prisma } from '../../infra/db';
+import { RateLimiterRes } from 'rate-limiter-flexible';
 import { emailQueue, smsQueue } from '../../infra/queue';
+import { consumeWhenAvailable, otpEmailDailyLimiter, otpResendLimiter } from '../../infra/rateLimit';
 import { env } from '../../config/env';
 import { isSmsConfigured } from '../../infra/sms';
 import { redis } from '../../infra/redis';
@@ -15,9 +17,11 @@ import type { AppleAuthInput, RegisterInput } from './auth.schema';
 import { generateOtp, hashOtp, verifyOtp as verifyOtpHash } from '../../utils/otp';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt';
 import { hashValue, verifyHash, sha256, verifyTokenHash } from '../../utils/hash';
-import { BadRequest, Unauthorized, Forbidden, Conflict } from '../../utils/errors';
+import { AppError, BadRequest, Unauthorized, Forbidden, Conflict, TooManyRequests } from '../../utils/errors';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
+const REGISTER_REPLAY_WAIT_MS = 8_000;
+const REGISTER_REPLAY_POLL_MS = 150;
 const MAX_OTP_ATTEMPTS = 5;
 // Retry-grace windows for flaky networks: when a client's request succeeds but the response is
 // lost in transit, its retry must not dead-end (logged out / forced to request a new code).
@@ -261,36 +265,142 @@ async function consumeOtp(identifier: string, code: string, purpose: 'AUTH' | 'R
   return record;
 }
 
+const REGISTER_WINDOW_MS = 60_000;
+
+function registerResultKey(email: string) {
+  return `register:result:${email}`;
+}
+
+function registerInflightKey(email: string) {
+  return `register:inflight:${email}`;
+}
+
+type StoredRegisterResult =
+  | { ok: true; writtenAt: number }
+  | { ok: false; writtenAt: number; status: number; code: string; message: string };
+
+function inCurrentWindow(writtenAt: number, msBeforeNext: number) {
+  const windowStartedAt = Date.now() - (REGISTER_WINDOW_MS - msBeforeNext);
+  return writtenAt >= windowStartedAt - 1_000;
+}
+
+function retryAfterSeconds(msBeforeNext: number) {
+  return Math.max(1, Math.ceil(msBeforeNext / 1000));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A second Create Account tap for an email that already has a code in flight joins that attempt.
+// It must not mint a new code, and it must not tell the phone the signup failed.
+async function replayPendingRegister(email: string, msBeforeNext: number) {
+  const seconds = retryAfterSeconds(msBeforeNext);
+  const deadline = Date.now() + REGISTER_REPLAY_WAIT_MS;
+  do {
+    const outcome = await readRegisterReplay(email, msBeforeNext, seconds);
+    if (outcome) return outcome;
+    if (Date.now() >= deadline) break;
+    await sleep(REGISTER_REPLAY_POLL_MS);
+  } while (Date.now() < deadline);
+  const outcome = await readRegisterReplay(email, msBeforeNext, seconds);
+  if (outcome) return outcome;
+  // The first tap is still working (slow Redis). The code is on the way. Do not call that a failure.
+  const inflight = await redis.exists(registerInflightKey(email)).catch(() => 0);
+  if (inflight) return { ok: true as const, retryAfterSeconds: seconds };
+  throw TooManyRequests('Too many OTP requests. Please wait and try again.');
+}
+
+async function readRegisterReplay(email: string, msBeforeNext: number, seconds: number) {
+  const rawResult = await redis.get(registerResultKey(email));
+  if (rawResult) {
+    try {
+      const stored = JSON.parse(rawResult) as StoredRegisterResult;
+      if (inCurrentWindow(stored.writtenAt, msBeforeNext)) {
+        if (stored.ok) return { ok: true as const, retryAfterSeconds: seconds };
+        throw new AppError(stored.status, stored.code, stored.message);
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+    }
+  }
+  // Pending signup keys live for 10 minutes. Only one written inside this 60s window counts,
+  // so a leftover form from an earlier attempt cannot impersonate the tap in flight.
+  const pendingTtl = await redis.pttl(`register:${email}`);
+  if (pendingTtl > OTP_TTL_MS - REGISTER_WINDOW_MS) return { ok: true as const, retryAfterSeconds: seconds };
+  return null;
+}
+
+async function rememberRegisterResult(email: string, result: StoredRegisterResult) {
+  await redis.set(registerResultKey(email), JSON.stringify(result), 'EX', 70).catch(() => {});
+}
+
 export const authService = {
   // Single-submit registration: stash the Create Account form + email a code. The account is
   // created (fully populated + branch-onboarded) only when the code is verified.
+  // One code per email per 60s. A retry inside that window replays this attempt.
   async register(input: RegisterInput) {
     const email = norm(input.email);
     if (isDisposableEmail(email)) {
       throw BadRequest('Please use a permanent email address — disposable email providers are not allowed.');
     }
-    // Release identities from soft-deleted accounts before creating the pending registration.
-    // Active owners still block signup; deleted owners should not trap users out of their email.
-    const [, passwordHash] = await Promise.all([
-      prepareRegistrationIdentities(email, input.phoneNumber ?? null),
-      hashValue(input.password),
-    ]);
 
-    const pending = {
-      passwordHash,
-      displayName: input.displayName,
-      phoneNumber: input.phoneNumber ?? null,
-      gender: input.gender ?? null,
-      dateOfBirth: input.dateOfBirth ? input.dateOfBirth.toISOString() : null,
-      occupation: input.occupation ?? null,
-      branchId: input.branchId ?? null,
-    };
-    const [, code] = await Promise.all([
-      redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000)),
-      createOtp(email, 'EMAIL', 'AUTH'),
-    ]);
-    await emailQueue.add('send-otp', { type: 'otp', to: email, code });
-    return { ok: true };
+    let seconds = REGISTER_WINDOW_MS / 1000;
+    try {
+      const resend = await consumeWhenAvailable(otpResendLimiter, email);
+      if (resend) seconds = retryAfterSeconds(resend.msBeforeNext);
+    } catch (err) {
+      if (err instanceof RateLimiterRes) return replayPendingRegister(email, err.msBeforeNext);
+      throw err;
+    }
+    try {
+      await consumeWhenAvailable(otpEmailDailyLimiter, email);
+    } catch (err) {
+      if (err instanceof RateLimiterRes) {
+        const message = 'Too many OTP requests. Please wait and try again.';
+        await rememberRegisterResult(email, { ok: false, writtenAt: Date.now(), status: 429, code: 'TOO_MANY_REQUESTS', message });
+        throw TooManyRequests(message);
+      }
+      throw err;
+    }
+
+    // Set before the slow work so a second tap knows this attempt is still running.
+    await redis.set(registerInflightKey(email), '1', 'EX', 20).catch(() => {});
+    let queued = false;
+    try {
+      // Release identities from soft-deleted accounts before creating the pending registration.
+      // Active owners still block signup; deleted owners should not trap users out of their email.
+      const [, passwordHash] = await Promise.all([
+        prepareRegistrationIdentities(email, input.phoneNumber ?? null),
+        hashValue(input.password),
+      ]);
+
+      const pending = {
+        passwordHash,
+        displayName: input.displayName,
+        phoneNumber: input.phoneNumber ?? null,
+        gender: input.gender ?? null,
+        dateOfBirth: input.dateOfBirth ? input.dateOfBirth.toISOString() : null,
+        occupation: input.occupation ?? null,
+        branchId: input.branchId ?? null,
+      };
+      const code = await createOtp(email, 'EMAIL', 'AUTH');
+      await emailQueue.add('send-otp', { type: 'otp', to: email, code });
+      queued = true;
+      await redis.set(`register:${email}`, JSON.stringify(pending), 'EX', Math.floor(OTP_TTL_MS / 1000));
+      await rememberRegisterResult(email, { ok: true, writtenAt: Date.now() });
+      return { ok: true as const, retryAfterSeconds: seconds };
+    } catch (err) {
+      const failure: StoredRegisterResult = err instanceof AppError
+        ? { ok: false, writtenAt: Date.now(), status: err.status, code: err.code, message: err.message }
+        : { ok: false, writtenAt: Date.now(), status: 500, code: 'INTERNAL', message: 'Something went wrong' };
+      await rememberRegisterResult(email, failure);
+      // The email never left. Drop the cooldown so the person can tap again once Redis answers.
+      if (!queued) await otpResendLimiter.delete(email).catch(() => {});
+      throw err;
+    } finally {
+      await redis.del(registerInflightKey(email)).catch(() => {});
+    }
   },
 
   async requestEmailOtp(email: string) {

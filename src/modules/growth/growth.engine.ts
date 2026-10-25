@@ -3,6 +3,7 @@ import { growthQueue } from '../../infra/queue';
 import { enqueue } from '../../infra/enqueue';
 import { notificationService } from '../notifications/notifications.service';
 import { logger } from '../../infra/logger';
+import { placeMember } from './place';
 
 type RequirementSource = 'AUTO' | 'SELF_ATTEST' | 'ADMIN_VERIFY' | 'CERTIFICATE' | 'URL_UPLOAD';
 type CompleteOpts = { verifiedById?: string; fileUrl?: string };
@@ -57,77 +58,15 @@ export const growthEngine = {
 
   // Derive the current stage from completed requirements, advance, award badges, notify on advance.
   // Idempotent: always recomputes from the full completion set, so retries/duplicates are safe.
-  async recompute(userId: string) {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { currentStageId: true } });
-    if (!user) return;
-
-    const [stages, completions, badges] = await Promise.all([
-      prisma.growthStage.findMany({
-        orderBy: { order: 'asc' },
-        select: { id: true, key: true, name: true, order: true, requirements: { select: { id: true } } },
-      }),
-      prisma.requirementCompletion.findMany({ where: { userId }, select: { requirementId: true } }),
-      prisma.badge.findMany({ select: { id: true, key: true } }),
-    ]);
-    if (stages.length === 0) return;
-
-    const done = new Set(completions.map((c) => c.requirementId));
-    const badgeByKey = new Map(badges.map((b) => [b.key, b.id]));
-    const stageComplete = (s: (typeof stages)[number]) =>
-      s.requirements.length > 0 && s.requirements.every((r) => done.has(r.id));
-
-    // Current stage = the lowest-order stage not yet fully complete (or the last stage if all done).
-    let current = stages[stages.length - 1]!;
-    for (const s of stages) {
-      if (!stageComplete(s)) {
-        current = s;
-        break;
-      }
-    }
-
-    // Award the badge for every fully-complete stage whose key matches a badge (idempotent).
-    for (const s of stages) {
-      const badgeId = badgeByKey.get(s.key);
-      if (badgeId && stageComplete(s)) {
-        await prisma.userBadge.upsert({
-          where: { userId_badgeId: { userId, badgeId } },
-          create: { userId, badgeId },
-          update: {},
-        });
-      }
-    }
-
-    if (current.id !== user.currentStageId) {
-      await prisma.user.update({ where: { id: userId }, data: { currentStageId: current.id } });
-      // If this stage earned a badge, mention it by name so the push actually feels like a reward.
-      // The badge itself was already upserted above; this only shapes the message.
-      const stageBadge = await prisma.badge.findUnique({
-        where: { key: current.key },
-        select: { name: true, icon: true },
-      });
-      const body = stageBadge
-        ? `You've advanced to ${current.name} and earned the ${stageBadge.name} badge ${stageBadge.icon}`
-        : `You've advanced to ${current.name}!`;
-      // notificationService.notify handles both the in-app row (socket + DB) and FCM push in one
-      // call. Best-effort — a push failure must not roll back the advance.
-      await notificationService
-        .notify(userId, {
-          type: 'GROWTH',
-          title: `Congratulations — you're now a ${current.name}`,
-          body,
-          data: {
-            type: 'growth',
-            notificationType: 'GROWTH',
-            route: 'GROWTH',
-            screen: 'MY_JOURNEY',
-            clickAction: 'OPEN_GROWTH',
-            deepLink: 'dgc://growth',
-            stageKey: current.key,
-            stageName: current.name,
-            ...(stageBadge ? { badgeName: stageBadge.name, badgeIcon: stageBadge.icon } : {}),
-          },
-        })
-        .catch(() => {});
-    }
+  // notify defaults to true. The pipeline sync script does not call this path, so a backfill
+  // cannot push the membership or open a Redis connection.
+  async recompute(userId: string, opts?: { notify?: boolean }) {
+    const notice = await placeMember(prisma, userId);
+    if (!notice || opts?.notify === false) return;
+    // notificationService.notify handles both the in-app row (socket + DB) and FCM push in one
+    // call. Best-effort — a push failure must not roll back the advance.
+    await notificationService
+      .notify(userId, { type: 'GROWTH', title: notice.title, body: notice.body, data: notice.data })
+      .catch(() => {});
   },
 };

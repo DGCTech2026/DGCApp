@@ -1,5 +1,7 @@
 import type { RequestHandler } from 'express';
+import { RateLimiterRes } from 'rate-limiter-flexible';
 import {
+  consumeWhenAvailable,
   otpResendLimiter,
   otpEmailDailyLimiter,
   otpIpLimiter,
@@ -10,20 +12,37 @@ import {
 } from '../infra/rateLimit';
 import { TooManyRequests } from '../utils/errors';
 
+const OTP_LIMIT_MESSAGE = 'Too many OTP requests. Please wait and try again.';
+
+// Per-IP cap only. Registration applies the per-email cooldown in authService.register so a
+// slow-network double tap can replay the first attempt instead of failing the signup.
+export const otpIpRateLimit: RequestHandler = async (req, _res, next) => {
+  const ip = req.ip ?? 'unknown';
+  try {
+    await consumeWhenAvailable(otpIpLimiter, ip);
+    next();
+  } catch (err) {
+    if (err instanceof RateLimiterRes) return next(TooManyRequests(OTP_LIMIT_MESSAGE));
+    next();
+  }
+};
+
 // Guards OTP request (email or phone): per-IP hourly, per-identifier resend cooldown + daily cap.
 // Mount AFTER the request validator so req.body.email / req.body.phone is present and valid.
+// A Redis error allows the request. Only a real limit answers 429.
 export const otpRequestRateLimit: RequestHandler = async (req, _res, next) => {
   const identifier = String(req.body?.email ?? req.body?.phone ?? '').toLowerCase();
   const ip = req.ip ?? 'unknown';
   try {
-    await otpIpLimiter.consume(ip);
+    await consumeWhenAvailable(otpIpLimiter, ip);
     if (identifier) {
-      await otpResendLimiter.consume(identifier);
-      await otpEmailDailyLimiter.consume(identifier);
+      await consumeWhenAvailable(otpResendLimiter, identifier);
+      await consumeWhenAvailable(otpEmailDailyLimiter, identifier);
     }
     next();
-  } catch {
-    next(TooManyRequests('Too many OTP requests. Please wait and try again.'));
+  } catch (err) {
+    if (err instanceof RateLimiterRes) return next(TooManyRequests(OTP_LIMIT_MESSAGE));
+    next();
   }
 };
 

@@ -28,7 +28,9 @@ export const authController = {
   },
 
   async register(req: Request, res: Response) {
-    res.json(await authService.register(req.body));
+    const result = await authService.register(req.body);
+    res.set('Retry-After', String(result.retryAfterSeconds));
+    res.json(result);
   },
 
   // Verify an OTP — body { identifier, code }; identifier is an email or E.164 phone.

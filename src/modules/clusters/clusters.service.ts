@@ -4,11 +4,9 @@ import { growthEngine } from '../growth/growth.engine';
 import { cached, cacheKeys, invalidate } from '../../infra/cache';
 import { joinChannelRoom, leaveChannelRoom } from '../../infra/realtime';
 
-// Minimum growth-stage order a member must be at to opt into a cluster. WORKER is order 4 —
-// they must have gone through First Timer → New Member → Foundations Graduate → Worker first.
-// Rationale: clusters are ministry teams; joining them assumes you've completed the onboarding
-// path. SUPER_ADMIN bypasses this check.
-const MIN_CLUSTER_JOIN_STAGE_ORDER = 4;
+// Joining a cluster is the task that finishes New Member (order 2). The door opens once
+// First Timer is done. SUPER_ADMIN bypasses this check.
+const MIN_CLUSTER_JOIN_STAGE_ORDER = 2;
 
 export const clusterService = {
   // Recommended Clusters list — all active clusters, flagged with whether the user has joined.
@@ -50,9 +48,7 @@ export const clusterService = {
   },
 
   async join(userId: string, role: string, clusterId: string) {
-    // Gate: users must be at WORKER stage (order 4) or higher before joining any cluster.
-    // Super admins bypass. Load the user's currentStage.order once — if they haven't advanced
-    // yet, tell them what to do next in the error message so the frontend can render it verbatim.
+    // Gate: First Timer must be finished. Super admins bypass. The message is safe to show verbatim.
     if (role !== 'SUPER_ADMIN') {
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -62,7 +58,7 @@ export const clusterService = {
       if (currentOrder < MIN_CLUSTER_JOIN_STAGE_ORDER) {
         const currentName = user?.currentStage?.name ?? 'First Timer';
         throw Forbidden(
-          `You need to reach the Worker stage before joining a cluster. You're currently at ${currentName}. Complete your onboarding steps (upload your service photo and unit-leader letter) and your Foundations School certificate to advance.`,
+          `You need to finish First Timer before joining a cluster. You're currently at ${currentName}. Join your branch and upload a photo of a service you attended.`,
         );
       }
     }

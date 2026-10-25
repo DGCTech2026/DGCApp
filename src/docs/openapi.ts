@@ -79,7 +79,7 @@ const bearer = [{ bearerAuth: [] as string[] }];
 
 // ---- auth ----
 const publicAuth: [string, string, z.ZodTypeAny, z.ZodTypeAny][] = [
-  ['/api/v1/auth/register', 'Register: submit the Create Account form, emails a verification code', registerSchema, okSchema],
+  ['/api/v1/auth/register', 'Register: email one verification code. A retry for the same email within 60s returns ok and does not send another code.', registerSchema, okSchema],
   ['/api/v1/auth/verify-otp', 'PREFERRED verify (email or phone): finishes a pending registration, else passwordless sign-in', verifyOtpUnifiedSchema, tokenSchema],
   ['/api/v1/auth/email/request-otp', 'Request an email OTP for sign-in (public, rate-limited)', requestOtpSchema, okSchema],
   ['/api/v1/auth/phone/request-otp', 'Request a phone OTP for sign-in (public, rate-limited; needs SMS provider)', requestPhoneOtpSchema, okSchema],
@@ -590,7 +590,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/v1/growth/me',
   tags: ['growth'],
-  summary: 'My Journey: current stage, progress %, next action, stage checklist, badges',
+  summary: 'My Journey: ten-stage pipeline, progress %, next action, current-stage tasks, badges',
   security: bearer,
   responses: { 200: { description: 'Growth summary', ...json(z.object({}).passthrough()) } },
 });
@@ -1253,7 +1253,7 @@ const apiDescription = [
   '',
   '## Flow 1 — Email + password registration',
   '',
-  '1. `POST /api/v1/auth/register` with the Create Account form, including `branchId`. Emails a 6-digit code and returns `{ "ok": true }`.',
+  '1. `POST /api/v1/auth/register` with the Create Account form, including `branchId`. Emails one 6-digit code and returns `{ "ok": true, "retryAfterSeconds": 60 }` with a `Retry-After` header. A second submit for that email inside the window returns the same success and keeps the original code, which stays valid for 10 minutes. A Redis blip on the limiter does not return 429; the signup still sends the code. `429` is only a real limit.',
   '2. `POST /api/v1/auth/verify-otp` with `{ "identifier": "<email>", "code": "<6-char string>" }`. Finishes the full account and returns `{ "accessToken", "refreshToken", "isNewUser": true, "user": {...} }`.',
   '',
   'Because the name and branch were supplied in step 1, the account is already onboarded — go straight to the dashboard.',

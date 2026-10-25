@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../../middleware/validate';
 import { authenticate } from '../../middleware/authenticate';
-import { otpRequestRateLimit, loginRateLimit, passwordResetRateLimit } from '../../middleware/rateLimit';
+import { otpIpRateLimit, otpRequestRateLimit, loginRateLimit, passwordResetRateLimit } from '../../middleware/rateLimit';
 import { asyncHandler } from '../../utils/asyncHandler';
 import {
   requestOtpSchema,
@@ -21,7 +21,8 @@ import { authController } from './auth.controller';
 export const authRouter = Router();
 
 // Registration: submit the Create Account form, then verify the emailed code via /verify-otp.
-authRouter.post('/register', validate(registerSchema), otpRequestRateLimit, asyncHandler(authController.register));
+// The per-email cooldown lives in the service so a retry joins the attempt already in flight.
+authRouter.post('/register', validate(registerSchema), otpIpRateLimit, asyncHandler(authController.register));
 
 // THE verify endpoint (email or phone): completes a pending registration, else passwordless sign-in.
 authRouter.post('/verify-otp', validate(verifyOtpUnifiedSchema), asyncHandler(authController.verify));

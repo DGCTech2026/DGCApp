@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
-import type { ChannelType, RequirementType, GrowthStageKey } from '@prisma/client';
+import type { ChannelType } from '@prisma/client';
+import { GROWTH_STAGES } from '../src/modules/growth/pipeline';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 
@@ -13,7 +14,7 @@ const pool = new Pool({
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
-// ---- config data (the pipeline lives here, not in code) ----
+// ---- config data. Growth stages live in src/modules/growth/pipeline.ts. ----
 
 const BRANCHES = [
   // City-scoped branches
@@ -52,40 +53,8 @@ const DEFAULT_CLUSTERS = [
   { slug: 'missions-evangelism', name: 'Missions & Evangelism', description: 'Outreach coordination.' },
 ];
 
-// The 5-stage pipeline. Removed from earlier PRD draft: FOUNDATIONS_GRADUATE,
-// EMERGING_LEADER, CELL_LEADER, MINISTRY_LEADER, PASTORATE_CANDIDATE — the app UX
-// and admin flow both work off these 5. The 5 removed enum values still exist in the
-// GrowthStageKey enum (safe to leave — Postgres accepts unused enum values) but no rows
-// are seeded for them, so /growth/me will never return them.
-//
-// ADVANCED_SOM_GRADUATE keeps its enum key for backward compatibility but is DISPLAYED
-// as "School of Ministry Graduate" everywhere the name field is shown.
-const STAGES: {
-  key: GrowthStageKey;
-  order: number;
-  name: string;
-  requirements: { key: string; label: string; type: RequirementType }[];
-}[] = [
-  { key: 'FIRST_TIMER', order: 1, name: 'First Timer', requirements: [
-    { key: 'SERVICE_PHOTO_UPLOADED', label: 'Upload a photo of a service you attended', type: 'URL_UPLOAD' },
-  ]},
-  { key: 'NEW_MEMBER', order: 2, name: 'New Member', requirements: [
-    { key: 'UNIT_LEADER_LETTER_UPLOADED', label: 'Upload attestation letter from your unit leader', type: 'URL_UPLOAD' },
-  ]},
-  // Worker's promotion is gated on the SOM (School of Ministry) certificate. Any super admin
-  // verifies via the existing certificate queue → auto-promotes to School of Ministry Graduate.
-  { key: 'WORKER', order: 3, name: 'Worker', requirements: [
-    { key: 'WORKER_SOM_CERT_VERIFIED', label: 'Upload SOM certificate (verified by admin)', type: 'CERTIFICATE' },
-  ]},
-  // Renamed from "Advanced SOM Graduate" — the DGC pipeline only has one SOM tier now.
-  // Enum key preserved for backward compat. To reach Pastorate, a super admin (typically
-  // themselves in Pastorate) grants spiritual oversight approval.
-  { key: 'ADVANCED_SOM_GRADUATE', order: 4, name: 'School of Ministry Graduate', requirements: [
-    { key: 'SPIRITUAL_OVERSIGHT_APPROVAL', label: 'Spiritual oversight approval', type: 'ADMIN_VERIFY' },
-  ]},
-  // Final stage — no further requirements. A user landing here stays here.
-  { key: 'PASTORATE', order: 5, name: 'Pastorate', requirements: [] },
-];
+// Ten app stages and their tasks: src/modules/growth/pipeline.ts.
+// This seed upserts them. scripts/ensure-growth-pipeline.ts is what rewrites a live database.
 
 const BADGES = [
   { key: 'FOUNDATIONS_GRADUATE', name: 'Foundations Graduate', icon: '🏅' },
@@ -154,7 +123,7 @@ async function main() {
     );
   }
 
-  for (const s of STAGES) {
+  for (const s of GROWTH_STAGES) {
     const stage = await prisma.growthStage.upsert({
       where: { key: s.key },
       update: { order: s.order, name: s.name },
@@ -174,7 +143,7 @@ async function main() {
   }
 
   console.log(
-    `Seeded: ${branches.length} branches, ${DEFAULT_CLUSTERS.length} clusters, ${STAGES.length} stages, ${BADGES.length} badges.`,
+    `Seeded: ${branches.length} branches, ${DEFAULT_CLUSTERS.length} clusters, ${GROWTH_STAGES.length} stages, ${BADGES.length} badges.`,
   );
 }
 

@@ -1,48 +1,39 @@
-// Ensures the growth pipeline in the database exactly matches the 5-stage definition:
-//   - The 5 expected stages exist with correct order + display name
-//   - Every expected requirement exists and is linked to the right stage
-//   - Any stage or requirement with an unknown key (leftover from the earlier 10-stage draft)
-//     is deleted; user pointers into those deleted stages are nullified first so the FK holds
-//   - Every non-deleted user has their currentStageId recomputed against the corrected pipeline
+// Ensures the growth pipeline in the database exactly matches src/modules/growth/pipeline.ts:
+//   - The ten app stages exist with the correct order and display name
+//   - Every task exists and is linked to the right stage
+//   - Any stage or requirement with an unknown key is deleted; user pointers into those
+//     deleted stages are nullified first so the FK holds
+//   - Account, branch, and cluster steps already done are recorded, then every member is
+//     stood in the furthest room those papers open. No push is sent for that move.
 //
-// Idempotent. Safe to run repeatedly. Use this after any seed change to production instead
-// of running `prisma db seed` (which would also re-touch branches/clusters/channels).
-//
-// Also fixes the corrupted-record case (user with currentStageId pointing at a stage that
-// no longer exists) — the nullify-then-recompute step heals it automatically.
+// Idempotent. Safe to run repeatedly. Use this after a pipeline change instead of
+// `prisma db seed` (which would also re-touch branches/clusters/channels).
 //
 // Run:  npx tsx -r dotenv/config scripts/ensure-growth-pipeline.ts
 import { PrismaClient } from '@prisma/client';
-import type { GrowthStageKey, RequirementType } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { growthEngine } from '../src/modules/growth/growth.engine';
+import { GROWTH_STAGES } from '../src/modules/growth/pipeline';
+import { placeMember } from '../src/modules/growth/place';
 
 const pool = new Pool({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
-// One source of truth. Mirrors prisma/seed.ts's STAGES. Enum keys removed from the pipeline:
-// FOUNDATIONS_GRADUATE, EMERGING_LEADER, CELL_LEADER, MINISTRY_LEADER, PASTORATE_CANDIDATE.
-const STAGES: {
-  key: GrowthStageKey;
-  order: number;
-  name: string;
-  requirements: { key: string; label: string; type: RequirementType }[];
-}[] = [
-  { key: 'FIRST_TIMER', order: 1, name: 'First Timer', requirements: [
-    { key: 'SERVICE_PHOTO_UPLOADED', label: 'Upload a photo of a service you attended', type: 'URL_UPLOAD' },
-  ]},
-  { key: 'NEW_MEMBER', order: 2, name: 'New Member', requirements: [
-    { key: 'UNIT_LEADER_LETTER_UPLOADED', label: 'Upload attestation letter from your unit leader', type: 'URL_UPLOAD' },
-  ]},
-  { key: 'WORKER', order: 3, name: 'Worker', requirements: [
-    { key: 'WORKER_SOM_CERT_VERIFIED', label: 'Upload SOM certificate (verified by admin)', type: 'CERTIFICATE' },
-  ]},
-  { key: 'ADVANCED_SOM_GRADUATE', order: 4, name: 'School of Ministry Graduate', requirements: [
-    { key: 'SPIRITUAL_OVERSIGHT_APPROVAL', label: 'Spiritual oversight approval', type: 'ADMIN_VERIFY' },
-  ]},
-  { key: 'PASTORATE', order: 5, name: 'Pastorate', requirements: [] },
-];
+const STAGES = GROWTH_STAGES;
+
+async function recordAuto(requirementKey: string, userIds: string[]) {
+  if (!userIds.length) return;
+  const req = await prisma.growthRequirement.findUnique({ where: { key: requirementKey }, select: { id: true } });
+  if (!req) return;
+  for (let i = 0; i < userIds.length; i += 500) {
+    const slice = userIds.slice(i, i + 500);
+    await prisma.requirementCompletion.createMany({
+      data: slice.map((userId) => ({ userId, requirementId: req.id, source: 'AUTO' as const })),
+      skipDuplicates: true,
+    });
+  }
+  console.log(`  ${requirementKey}: marked done for ${userIds.length} member(s) who already did it`);
+}
 
 async function main() {
   console.log('--- Growth pipeline sync ---\n');
@@ -110,8 +101,26 @@ async function main() {
   });
   console.log(`Requirements removed (orphaned): ${removedReqs.count}`);
 
-  // 6. Recompute every non-deleted user. Idempotent; batched to keep memory flat on Render's
-  // starter instance. Users whose pointer was nullified in step 1 get a fresh valid stage now.
+  // 6. Steps the app already did before these tasks existed: an account, a branch, a cluster.
+  // Without this, recompute would stand every existing member back at First Timer.
+  console.log('\nRecording steps members have already finished…');
+  const members = await prisma.user.findMany({ where: { deletedAt: null }, select: { id: true } });
+  const branchMembers = await prisma.branchMembership.findMany({
+    where: { user: { deletedAt: null } },
+    select: { userId: true },
+    distinct: ['userId'],
+  });
+  const clusterMembers = await prisma.clusterMembership.findMany({
+    where: { user: { deletedAt: null } },
+    select: { userId: true },
+    distinct: ['userId'],
+  });
+  await recordAuto('CREATE_ACCOUNT', members.map((u) => u.id));
+  await recordAuto('JOIN_BRANCH', branchMembers.map((m) => m.userId));
+  await recordAuto('JOIN_CLUSTER', clusterMembers.map((m) => m.userId));
+
+  // 7. Recompute every non-deleted user. Idempotent; batched to keep memory flat on Render's
+  // starter instance. notify is off so this backfill does not push the whole membership.
   const total = await prisma.user.count({ where: { deletedAt: null } });
   console.log(`\nRecomputing ${total} user(s)…`);
   let cursor: string | undefined;
@@ -125,14 +134,14 @@ async function main() {
     });
     if (!batch.length) break;
     for (const u of batch) {
-      await growthEngine.recompute(u.id);
+      await placeMember(prisma, u.id);
     }
     done += batch.length;
     cursor = batch[batch.length - 1]!.id;
     if (done % 500 === 0 || batch.length < 100) console.log(`  …${done}/${total}`);
     if (batch.length < 100) break;
   }
-  console.log(`\n✓ Done. Pipeline is in sync with the 5-stage definition.`);
+  console.log(`\n✓ Done. Pipeline is in sync with the ten app stages.`);
 }
 
 main()
