@@ -12,6 +12,10 @@ services:
     runtime: node
     region: oregon # same region as your Render Postgres (oregon-postgres) to keep DB latency low
     plan: starter # always-on. The free plan spins down when idle, which drops WebSocket connections and pauses BullMQ workers.
+    # One service. Horizontal scale is more copies of this same service, not a second service.
+    # Leave this at 1 until the phone connects with websocket only. Then raise the number
+    # on the Compute page, or here. Each copy opens DB_POOL_MAX Postgres connections.
+    numInstances: 1
     branch: main
     autoDeploy: true
     healthCheckPath: /health
@@ -23,6 +27,8 @@ services:
       # --- Non-secret config (safe to keep in the blueprint) ---
       - key: NODE_ENV
         value: production
+      - key: DB_POOL_MAX
+        value: '10' # per copy. 1 copy = 10 connections. 3 copies = 30. Stay under the Postgres limit.
       - key: SERVICE_NAME
         value: dgc-backend
       - key: LOG_LEVEL

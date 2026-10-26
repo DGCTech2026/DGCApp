@@ -29,14 +29,20 @@
      the HTTP-polling handshake doesn't bounce between instances.
 
 3. **Right-size Redis.**
-   - Move off Upstash free (**~10k commands/day cap** — blows instantly under load). Use Upstash paid in
-     the **same region as Render (Oregon/us-west)** or Render Key Value. Sockets + BullMQ + rate-limiter
-     all hit Redis hard; watch command count + latency.
+   - Paid Render Key Value in Oregon, same region as the web service. Leave eviction at "do not evict."
+   - Queues drop finished jobs and keep 20 failures and 100 event-log lines (`src/infra/queue.ts`).
+     A full Redis rejects the script that would delete old jobs, so the queues can never drain.
+   - If logs show `OOM command not allowed when used memory > 'maxmemory'`, run
+     `scripts/clear-stuck-queues.ts` on the Render shell. It removes `bull:*` keys only.
 
-4. **Split workers into their own service.**
-   - Add a worker entrypoint (`src/worker.ts` that only calls `startWorkers()`), deploy as a Render
-     **Background Worker** pointed at the same Redis + DB. Remove `startWorkers()` from `server.ts` so web
-     instances don't burn CPU on jobs.
+4. **Scale the one web service sideways.**
+   - Workers stay inside the web process. Extra copies compete for the same BullMQ jobs.
+     Schedulers use a fixed id, so copies do not double-send reminders.
+   - `render.yaml` keeps `numInstances: 1`. Raise that number to add copies. Set `DB_POOL_MAX`
+     so copies × pool stays under the Postgres connection limit.
+   - Socket rooms already go through the Redis adapter. Before `numInstances` is greater than 1,
+     the phone must connect with websocket only. Render spreads requests, and a polling handshake
+     is not pinned to one copy.
 
 5. **Query hotspots.**
    - [x] `GET /channels` unread counts + last message — batched into ~4 queries (was N+1). _(done)_

@@ -6,6 +6,8 @@ import './workers/notification.worker';
 import './workers/growth.worker';
 
 export function startWorkers() {
+  // Each copy of the web service runs these workers. BullMQ hands a job to one copy.
+  // upsertJobScheduler uses a fixed id, so extra copies refresh the same schedule.
   // Repeatable scan (every 15 min) that sends pre-event reminders. Idempotent across restarts.
   notificationQueue
     .upsertJobScheduler('event-reminders', { every: 15 * 60 * 1000 }, { name: 'event-reminders-scan' })

@@ -15,6 +15,9 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url(),
+  // Connections this one process may hold. Copies of the service each open their own pool,
+  // so DB_POOL_MAX × instance count must stay under the Postgres connection limit.
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(20).default(10),
   REDIS_URL: z.string().url(),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),

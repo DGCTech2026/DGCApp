@@ -1,5 +1,6 @@
 import { Redis } from 'ioredis';
 import { env } from '../config/env';
+import { logger } from './logger';
 
 // BullMQ + socket adapter both need maxRetriesPerRequest: null.
 export const makeRedis = () => new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
@@ -10,6 +11,9 @@ export const makeRedis = () => new Redis(env.REDIS_URL, { maxRetriesPerRequest: 
 // "hangs forever" into "fails fast, caller falls back". The BullMQ/socket-adapter connections
 // (which need long-blocking commands) are created separately via makeRedis and stay unbounded.
 export const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null, commandTimeout: 2000 });
+redis.on('error', (err) => {
+  logger.warn({ err: err.message }, 'Redis client error');
+});
 
 // Race a Redis read against a deadline and resolve with `fallback` on timeout OR error.
 // For hot paths (cache reads, presence) even 2s is too long to stall a request — degrade

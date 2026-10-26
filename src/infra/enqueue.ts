@@ -13,7 +13,7 @@ const DEFAULT_OPTS: JobsOptions = {
   attempts: 3,
   backoff: { type: 'exponential', delay: 2000 },
   removeOnComplete: true,
-  removeOnFail: { age: 24 * 60 * 60, count: 500 },
+  removeOnFail: { count: 20 },
 };
 
 export function enqueue(queue: Queue, name: string, data: unknown, opts?: JobsOptions): void {

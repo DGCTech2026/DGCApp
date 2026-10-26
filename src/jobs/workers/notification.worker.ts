@@ -1,8 +1,8 @@
 import { Worker } from 'bullmq';
-import { env } from '../../config/env';
 import { prisma } from '../../infra/db';
 import { logger } from '../../infra/logger';
 import { instrumentWorker } from '../../infra/metrics';
+import { workerOptions } from '../../infra/queue';
 import { captureJobException } from '../../instrument';
 import { eventService } from '../../modules/events/events.service';
 import { audioRoomService } from '../../modules/audio-rooms/audio-rooms.service';
@@ -10,7 +10,6 @@ import { callService } from '../../modules/calls/calls.service';
 import { notificationService } from '../../modules/notifications/notifications.service';
 import { pushService } from '../../modules/push/push.service';
 
-const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 const BATCH = 1000;
 
 function channelDisplayName(channel: {
@@ -446,7 +445,7 @@ export const notificationWorker = new Worker(
 
     logger.info({ jobId: job.id, name: job.name }, 'Notification job received (no handler)');
   },
-  { connection },
+  workerOptions,
 );
 
 notificationWorker.on('failed', (job, err) => {

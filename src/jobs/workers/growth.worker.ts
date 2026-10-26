@@ -1,11 +1,9 @@
 import { Worker } from 'bullmq';
-import { env } from '../../config/env';
 import { growthEngine } from '../../modules/growth/growth.engine';
 import { logger } from '../../infra/logger';
 import { instrumentWorker } from '../../infra/metrics';
+import { workerOptions } from '../../infra/queue';
 import { captureJobException } from '../../instrument';
-
-const connection = { url: env.REDIS_URL, maxRetriesPerRequest: null as null };
 
 // Processes AUTO requirement completions off the request path (CLAUDE.md §6.2).
 export const growthWorker = new Worker(
@@ -16,7 +14,7 @@ export const growthWorker = new Worker(
       await growthEngine.completeRequirement(userId, requirementKey, 'AUTO');
     }
   },
-  { connection },
+  workerOptions,
 );
 
 growthWorker.on('failed', (job, err) => {

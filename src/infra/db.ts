@@ -4,9 +4,8 @@ import { Pool } from 'pg';
 import { env } from '../config/env';
 
 function makePrisma() {
-  // Default max is 10 — bursts of concurrent requests queue behind it. Render Postgres allows
-  // far more; 20 keeps headroom for the worker's connections on the same instance.
-  const pool = new Pool({ connectionString: env.DATABASE_URL, max: 20, keepAlive: true });
+  // One pool per process. Raising the service's instance count multiplies this number.
+  const pool = new Pool({ connectionString: env.DATABASE_URL, max: env.DB_POOL_MAX, keepAlive: true });
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter, log: ['warn', 'error'] });
 }
