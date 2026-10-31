@@ -15,3 +15,6 @@ mediaRouter.post(
   validate(uploadSignatureSchema),
   asyncHandler(mediaController.createUploadSignature),
 );
+
+// Allowed file types + size limits for message media, so the client can check a file before uploading.
+mediaRouter.get('/limits', authenticate, asyncHandler(mediaController.limits));

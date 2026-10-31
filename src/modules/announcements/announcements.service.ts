@@ -4,6 +4,7 @@ import { enqueue } from '../../infra/enqueue';
 import { emitToChannel, joinChannelRoom } from '../../infra/realtime';
 import { Forbidden, NotFound } from '../../utils/errors';
 import type { PostAnnouncementInput } from './announcements.schema';
+import { inspectMediaUrl, type MediaKind } from '../media/media.limits';
 
 // PRD §4/§3: official comms. The Global Announcement channel is org-wide; each branch's read-only
 // "Service Updates" section is its branch announcement channel. Both are posted only by super admins
@@ -42,27 +43,12 @@ async function branchChannelId(branchId: string): Promise<string> {
   return ch.id;
 }
 
-type MediaKind = 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE';
-
-const AUDIO_EXT = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|amr|weba)$/i;
-const DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|txt|csv|zip)$/i;
-
-// Cloudinary delivery URLs carry the resource type in the path (/image/, /video/, /raw/), but it
-// files audio under /video/ and PDFs under /image/ — the extension settles those two cases.
-function mediaType(url: string): MediaKind {
-  const path = url.split(/[?#]/)[0] ?? url;
-  if (AUDIO_EXT.test(path)) return 'AUDIO';
-  if (DOC_EXT.test(path)) return 'FILE';
-  if (path.includes('/video/upload/')) return 'VIDEO';
-  if (path.includes('/image/upload/')) return 'IMAGE';
-  return 'FILE';
-}
-
 // The single-file `mediaUrl` form is treated as a one-item album, so every media announcement has
-// attachment rows and clients can read `attachments` uniformly.
+// attachment rows and clients can read `attachments` uniformly. Each URL is checked (our Cloudinary
+// account, allowed type, size) before anything is written; the first bad item fails the whole post.
 function toAttachments(input: PostAnnouncementInput) {
   const items = input.attachments ?? (input.mediaUrl ? [{ url: input.mediaUrl }] : []);
-  return items.map((a, position) => ({ ...a, position, type: mediaType(a.url) }));
+  return items.map(({ bytes, ...a }, position) => ({ ...a, position, type: inspectMediaUrl(a.url, bytes).kind }));
 }
 
 function pushPreview(attachments: { type: MediaKind }[]): string | null {

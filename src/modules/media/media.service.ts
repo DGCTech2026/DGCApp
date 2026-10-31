@@ -1,6 +1,7 @@
 import { cloudinary } from '../../infra/cloudinary';
 import { BadRequest } from '../../utils/errors';
 import type { UploadType } from './media.schema';
+import { mediaLimits } from './media.limits';
 
 const FOLDERS = {
   avatar: 'dgc/avatars',
@@ -32,6 +33,8 @@ export const mediaService = {
       // this response per upload type and reuse it until expiresAt — one signature covers any
       // number of uploads to this folder, so most uploads need ZERO extra round trips.
       expiresAt: new Date((timestamp + 3600) * 1000).toISOString(),
+      // Same table as GET /media/limits — check type/size before uploading.
+      limits: mediaLimits(),
     };
   },
 };

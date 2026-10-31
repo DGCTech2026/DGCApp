@@ -1,11 +1,12 @@
 import { z } from 'zod';
-
-export const MAX_ANNOUNCEMENT_ATTACHMENTS = 10;
+import { MAX_ATTACHMENTS_PER_MESSAGE } from '../media/media.limits';
 
 const attachmentSchema = z.object({
   url: z.string().url(),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
+  // Cloudinary's upload response `bytes`; checked against GET /media/limits when sent.
+  bytes: z.number().int().nonnegative().optional(),
 });
 
 // An announcement may carry media: the client uploads each file to Cloudinary first
@@ -17,7 +18,7 @@ export const postAnnouncementSchema = z
     title: z.string().min(1).max(200),
     body: z.string().max(4000).optional(),
     mediaUrl: z.string().url().optional(),
-    attachments: z.array(attachmentSchema).min(1).max(MAX_ANNOUNCEMENT_ATTACHMENTS).optional(),
+    attachments: z.array(attachmentSchema).min(1).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
   })
   .refine((v) => !(v.mediaUrl && v.attachments), {
     message: 'Send either mediaUrl or attachments, not both',

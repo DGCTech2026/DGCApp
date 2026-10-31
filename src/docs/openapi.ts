@@ -54,6 +54,16 @@ const tokenSchema = z.object({
     .nullable(),
 });
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
+const mediaKindLimitSchema = z.object({ maxBytes: z.number(), formats: z.array(z.string()) });
+const mediaLimitsSchema = z.object({
+  kinds: z.object({
+    IMAGE: mediaKindLimitSchema,
+    VIDEO: mediaKindLimitSchema,
+    AUDIO: mediaKindLimitSchema,
+    FILE: mediaKindLimitSchema,
+  }),
+  maxAttachments: z.number(),
+});
 const branchSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -223,9 +233,25 @@ registry.registerPath({
           signature: z.string(),
           uploadUrl: z.string(),
           expiresAt: z.string(), // cache the whole response per type and reuse until this moment
+          limits: mediaLimitsSchema, // same as GET /media/limits
         }),
       ),
     },
+    401: { description: 'Unauthorized', ...json(errorSchema) },
+  },
+});
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/media/limits',
+  tags: ['media'],
+  summary: 'Allowed file types and max sizes for message media — check a file against this before uploading',
+  description:
+    'kinds.<IMAGE|VIDEO|AUDIO|FILE> = { maxBytes, formats[] } (formats are lowercase extensions). ' +
+    'maxAttachments = most files per message. Announcement posts enforce the same table and fail with ' +
+    'MEDIA_URL_NOT_ALLOWED (400), MEDIA_TYPE_NOT_SUPPORTED (415) or MEDIA_TOO_LARGE (413).',
+  security: bearer,
+  responses: {
+    200: { description: 'Media limits', ...json(mediaLimitsSchema) },
     401: { description: 'Unauthorized', ...json(errorSchema) },
   },
 });
@@ -917,6 +943,11 @@ registry.registerPath({
 });
 
 // ---- announcements (PRD §4) ----
+const announcementMediaErrors = {
+  400: { description: 'BAD_REQUEST (invalid body) or MEDIA_URL_NOT_ALLOWED (not from the DGC Cloudinary account)', ...json(errorSchema) },
+  413: { description: 'MEDIA_TOO_LARGE — attachment bytes exceed the maxBytes for its kind', ...json(errorSchema) },
+  415: { description: 'MEDIA_TYPE_NOT_SUPPORTED — extension not in GET /media/limits', ...json(errorSchema) },
+};
 registry.registerPath({
   method: 'get',
   path: '/api/v1/announcements',
@@ -932,16 +963,18 @@ registry.registerPath({
   summary: 'Post an announcement (super admin or announcement admin) — notifies all members',
   description:
     'Media: upload each file first via POST /media/signature { type: "media" } + direct Cloudinary upload, then send ' +
-    'the secure_url(s). For an album send attachments: [{ url, width?, height? }] (1–10, in display order); for one file ' +
+    'the secure_url(s). For an album send attachments: [{ url, width?, height?, bytes? }] (1–10, in display order; pass the bytes Cloudinary returns so size is checked); for one file ' +
     'you may instead send mediaUrl (older single-file form, still supported). Not both. body is optional when media is sent. ' +
     'Response: attachments[] ({ id, url, type IMAGE/VIDEO/AUDIO/FILE, position, width, height }) ordered by position, ' +
     'plus mediaUrl = first attachment url and type = first attachment type (TEXT when there is no media). ' +
-    'The GET feeds return the same shape.',
+    'The GET feeds return the same shape. Every media URL must be a file in the DGC Cloudinary account with an ' +
+    'allowed extension (see GET /media/limits).',
   security: bearer,
   request: { body: json(postAnnouncementSchema) },
   responses: {
     201: { description: 'Created announcement', ...json(z.object({}).passthrough()) },
     403: { description: 'Not authorized to post', ...json(errorSchema) },
+    ...announcementMediaErrors,
   },
 });
 registry.registerPath({
@@ -990,6 +1023,7 @@ registry.registerPath({
   responses: {
     201: { description: 'Created announcement', ...json(z.object({}).passthrough()) },
     403: { description: 'Not authorized', ...json(errorSchema) },
+    ...announcementMediaErrors,
   },
 });
 
