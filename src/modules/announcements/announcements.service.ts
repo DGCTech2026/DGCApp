@@ -13,7 +13,11 @@ const ANNOUNCEMENT_SELECT = {
   title: true,
   body: true,
   type: true,
-  mediaUrl: true,
+  mediaUrl: true, // first attachment's URL; kept for clients that predate albums
+  attachments: {
+    select: { id: true, url: true, type: true, position: true, width: true, height: true },
+    orderBy: { position: 'asc' },
+  },
   createdAt: true,
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
   // Members can react (PRD §4) — reactions post via /messages/:id/reactions and surface here.
@@ -38,23 +42,49 @@ async function branchChannelId(branchId: string): Promise<string> {
   return ch.id;
 }
 
-// Cloudinary delivery URLs carry the resource type in the path (/image/upload/, /video/upload/).
-function mediaType(url: string): 'IMAGE' | 'VIDEO' | 'FILE' {
-  if (url.includes('/video/upload/')) return 'VIDEO';
-  if (url.includes('/image/upload/')) return 'IMAGE';
+type MediaKind = 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE';
+
+const AUDIO_EXT = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|amr|weba)$/i;
+const DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|txt|csv|zip)$/i;
+
+// Cloudinary delivery URLs carry the resource type in the path (/image/, /video/, /raw/), but it
+// files audio under /video/ and PDFs under /image/ — the extension settles those two cases.
+function mediaType(url: string): MediaKind {
+  const path = url.split(/[?#]/)[0] ?? url;
+  if (AUDIO_EXT.test(path)) return 'AUDIO';
+  if (DOC_EXT.test(path)) return 'FILE';
+  if (path.includes('/video/upload/')) return 'VIDEO';
+  if (path.includes('/image/upload/')) return 'IMAGE';
   return 'FILE';
+}
+
+// The single-file `mediaUrl` form is treated as a one-item album, so every media announcement has
+// attachment rows and clients can read `attachments` uniformly.
+function toAttachments(input: PostAnnouncementInput) {
+  const items = input.attachments ?? (input.mediaUrl ? [{ url: input.mediaUrl }] : []);
+  return items.map((a, position) => ({ ...a, position, type: mediaType(a.url) }));
+}
+
+function pushPreview(attachments: { type: MediaKind }[]): string | null {
+  if (attachments.length === 0) return null;
+  if (attachments.length > 1) return `Shared ${attachments.length} attachments`;
+  const t = attachments[0]?.type;
+  return t === 'IMAGE' ? 'Shared a photo' : t === 'VIDEO' ? 'Shared a video' : t === 'AUDIO' ? 'Shared audio' : 'Shared a file';
 }
 
 // Post to an announcement channel + fan out a Notification to every member off the request path.
 async function broadcast(channelId: string, userId: string, input: PostAnnouncementInput) {
+  const attachments = toAttachments(input);
+  // Message + attachment rows are written in one nested create, so a failure leaves neither.
   const message = await prisma.message.create({
     data: {
       channelId,
       senderId: userId,
-      type: input.mediaUrl ? mediaType(input.mediaUrl) : 'TEXT',
+      type: attachments[0]?.type ?? 'TEXT',
       title: input.title,
       body: input.body?.trim() || null,
-      mediaUrl: input.mediaUrl ?? null,
+      mediaUrl: attachments[0]?.url ?? null,
+      ...(attachments.length > 0 && { attachments: { create: attachments } }),
     },
     select: ANNOUNCEMENT_SELECT,
   });
@@ -63,7 +93,7 @@ async function broadcast(channelId: string, userId: string, input: PostAnnouncem
     channelId,
     messageId: message.id,
     title: input.title,
-    body: message.body ?? (message.mediaUrl ? 'Shared a photo or video' : null),
+    body: message.body ?? pushPreview(attachments),
     excludeUserId: userId,
   });
   return message;

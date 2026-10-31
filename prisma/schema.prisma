@@ -456,6 +456,7 @@ model Message {
   sender   User             @relation(fields: [senderId], references: [id])
   reactions Reaction[]
   receipts MessageReceipt[]
+  attachments MessageAttachment[]
 
   // Keyset pagination over (channelId, createdAt, id).
   @@unique([senderId, channelId, clientMessageId])
@@ -463,6 +464,23 @@ model Message {
   @@index([senderId])
   @@index([replyToId])
   @@index([deletedAt])
+}
+
+// Ordered media on a message (photo albums). Message.mediaUrl still mirrors the first item so
+// clients that only read mediaUrl keep working.
+model MessageAttachment {
+  id        String      @id @default(cuid())
+  messageId String
+  url       String // Cloudinary secure_url
+  type      MessageType // IMAGE / VIDEO / AUDIO / FILE
+  position  Int
+  width     Int?
+  height    Int?
+  createdAt DateTime    @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, position])
 }
 
 // Per-message delivered/read — DMs ONLY (CLAUDE.md §5). Never write these for large channels.

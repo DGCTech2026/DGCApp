@@ -930,7 +930,13 @@ registry.registerPath({
   path: '/api/v1/announcements',
   tags: ['announcements'],
   summary: 'Post an announcement (super admin or announcement admin) — notifies all members',
-  description: 'Optional image/video: upload it first via POST /media/signature { type: "media" } + direct Cloudinary upload, then send the secure_url as mediaUrl. body is optional when mediaUrl is set. Response includes type (TEXT/IMAGE/VIDEO/FILE) and mediaUrl.',
+  description:
+    'Media: upload each file first via POST /media/signature { type: "media" } + direct Cloudinary upload, then send ' +
+    'the secure_url(s). For an album send attachments: [{ url, width?, height? }] (1–10, in display order); for one file ' +
+    'you may instead send mediaUrl (older single-file form, still supported). Not both. body is optional when media is sent. ' +
+    'Response: attachments[] ({ id, url, type IMAGE/VIDEO/AUDIO/FILE, position, width, height }) ordered by position, ' +
+    'plus mediaUrl = first attachment url and type = first attachment type (TEXT when there is no media). ' +
+    'The GET feeds return the same shape.',
   security: bearer,
   request: { body: json(postAnnouncementSchema) },
   responses: {
@@ -978,7 +984,7 @@ registry.registerPath({
   path: '/api/v1/branches/{branchId}/announcements',
   tags: ['announcements'],
   summary: 'Post a branch announcement (branch admin or super admin) — notifies branch members',
-  description: 'Same body as POST /announcements, including optional mediaUrl.',
+  description: 'Same body and response as POST /announcements, including attachments (albums) and mediaUrl.',
   security: bearer,
   request: { params: z.object({ branchId: z.string() }), body: json(postAnnouncementSchema) },
   responses: {
