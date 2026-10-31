@@ -930,6 +930,7 @@ registry.registerPath({
   path: '/api/v1/announcements',
   tags: ['announcements'],
   summary: 'Post an announcement (super admin or announcement admin) — notifies all members',
+  description: 'Optional image/video: upload it first via POST /media/signature { type: "media" } + direct Cloudinary upload, then send the secure_url as mediaUrl. body is optional when mediaUrl is set. Response includes type (TEXT/IMAGE/VIDEO/FILE) and mediaUrl.',
   security: bearer,
   request: { body: json(postAnnouncementSchema) },
   responses: {
@@ -977,6 +978,7 @@ registry.registerPath({
   path: '/api/v1/branches/{branchId}/announcements',
   tags: ['announcements'],
   summary: 'Post a branch announcement (branch admin or super admin) — notifies branch members',
+  description: 'Same body as POST /announcements, including optional mediaUrl.',
   security: bearer,
   request: { params: z.object({ branchId: z.string() }), body: json(postAnnouncementSchema) },
   responses: {

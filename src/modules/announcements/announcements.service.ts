@@ -12,6 +12,8 @@ const ANNOUNCEMENT_SELECT = {
   id: true,
   title: true,
   body: true,
+  type: true,
+  mediaUrl: true,
   createdAt: true,
   sender: { select: { id: true, displayName: true, avatarUrl: true } },
   // Members can react (PRD §4) — reactions post via /messages/:id/reactions and surface here.
@@ -36,10 +38,24 @@ async function branchChannelId(branchId: string): Promise<string> {
   return ch.id;
 }
 
+// Cloudinary delivery URLs carry the resource type in the path (/image/upload/, /video/upload/).
+function mediaType(url: string): 'IMAGE' | 'VIDEO' | 'FILE' {
+  if (url.includes('/video/upload/')) return 'VIDEO';
+  if (url.includes('/image/upload/')) return 'IMAGE';
+  return 'FILE';
+}
+
 // Post to an announcement channel + fan out a Notification to every member off the request path.
 async function broadcast(channelId: string, userId: string, input: PostAnnouncementInput) {
   const message = await prisma.message.create({
-    data: { channelId, senderId: userId, type: 'TEXT', title: input.title, body: input.body },
+    data: {
+      channelId,
+      senderId: userId,
+      type: input.mediaUrl ? mediaType(input.mediaUrl) : 'TEXT',
+      title: input.title,
+      body: input.body?.trim() || null,
+      mediaUrl: input.mediaUrl ?? null,
+    },
     select: ANNOUNCEMENT_SELECT,
   });
   emitToChannel(channelId, 'message:new', message); // live for members currently connected
@@ -47,7 +63,7 @@ async function broadcast(channelId: string, userId: string, input: PostAnnouncem
     channelId,
     messageId: message.id,
     title: input.title,
-    body: input.body,
+    body: message.body ?? (message.mediaUrl ? 'Shared a photo or video' : null),
     excludeUserId: userId,
   });
   return message;
